@@ -8,18 +8,18 @@ interface RpmChartProps {
 }
 
 export default function RpmChart({ cycles }: RpmChartProps) {
-  const [colorByDevice, setColorByDevice] = useState(true);
+  const [colorByDevice, setColorByDevice] = useState(false); // Default to single color
   const plotData = useMemo(() => {
     if (cycles.length === 0) {
       return {};
     }
 
-    // Device color mapping
+    // Device color mapping (using Palette colors)
     const deviceColors: Record<string, string> = {
-      'R1': '#f38ba8', // red/pink
-      'R2': '#fab387', // orange
-      'R3': '#a6e3a1', // green
-      'R4': '#89b4fa', // blue
+      'R1': '#EF4444', // Alert Red
+      'R2': '#F49E0A', // Trend Orange
+      'R3': '#0FB880', // Green Accent
+      'R4': '#2563EB', // Brand Blue
     };
 
     // Convert timestamp to hours from midnight
@@ -62,7 +62,43 @@ export default function RpmChart({ cycles }: RpmChartProps) {
       );
     });
 
-    return { sessionData, deviceColors };
+    // Calculate operation segments for background shapes
+    const allPoints: Array<{ x: number; y: number }> = [];
+    Object.values(sessionData).forEach(data => {
+      data.x.forEach((x, i) => {
+        allPoints.push({ x, y: data.y[i] });
+      });
+    });
+    allPoints.sort((a, b) => a.x - b.x);
+
+    const operationSegments: Array<{ start: number; end: number; duration: number }> = [];
+    if (allPoints.length > 0) {
+      let segmentStart = allPoints[0].x;
+      let segmentEnd = allPoints[0].x;
+
+      for (let i = 1; i < allPoints.length; i++) {
+        const gap = allPoints[i].x - allPoints[i - 1].x;
+        if (gap > 0.25) { // 15 minutes gap
+          // Save current segment
+          operationSegments.push({
+            start: segmentStart,
+            end: segmentEnd,
+            duration: segmentEnd - segmentStart
+          });
+          // Start new segment
+          segmentStart = allPoints[i].x;
+        }
+        segmentEnd = allPoints[i].x;
+      }
+      // Save last segment
+      operationSegments.push({
+        start: segmentStart,
+        end: segmentEnd,
+        duration: segmentEnd - segmentStart
+      });
+    }
+
+    return { sessionData, deviceColors, operationSegments };
   }, [cycles]);
 
   if (cycles.length === 0) {
@@ -89,18 +125,38 @@ export default function RpmChart({ cycles }: RpmChartProps) {
   // Sort by time
   allPoints.sort((a, b) => a.x - b.x);
 
+  // Insert null breaks for gaps > 15 minutes (0.25 hours)
+  const lineX: (number | null)[] = [];
+  const lineY: (number | null)[] = [];
+
+  for (let i = 0; i < allPoints.length; i++) {
+    lineX.push(allPoints[i].x);
+    lineY.push(allPoints[i].y);
+
+    // Check gap to next point
+    if (i < allPoints.length - 1) {
+      const gap = allPoints[i + 1].x - allPoints[i].x;
+      if (gap > 0.25) { // 15 minutes = 0.25 hours
+        // Insert null to break the line
+        lineX.push(null);
+        lineY.push(null);
+      }
+    }
+  }
+
   // Create line trace (all sessions connected by time)
   const lineTrace = {
-    x: allPoints.map(p => p.x),
-    y: allPoints.map(p => p.y),
+    x: lineX,
+    y: lineY,
     type: 'scattergl' as const,
     mode: 'lines' as const,
     line: {
-      color: '#45475a',
+      color: '#475569', // Body Text from Palette
       width: 1,
     },
     hoverinfo: 'skip' as const,
     showlegend: false,
+    connectgaps: false,
   };
 
   let traces;
@@ -130,7 +186,7 @@ export default function RpmChart({ cycles }: RpmChartProps) {
       mode: 'markers' as const,
       marker: {
         size: 6,
-        color: '#89b4fa',
+        color: '#F49E0A', // Trend Orange from Palette
       },
       text: allPoints.map(p => p.text),
       hoverinfo: 'text' as const,
@@ -147,7 +203,7 @@ export default function RpmChart({ cycles }: RpmChartProps) {
           onClick={() => setColorByDevice(!colorByDevice)}
           style={{
             ...styles.toggleButton,
-            backgroundColor: colorByDevice ? '#89b4fa' : '#45475a',
+            backgroundColor: colorByDevice ? '#2563EB' : '#475569', // Brand Blue / Body Text
           }}
         >
           {colorByDevice ? 'Device별 색상' : '단일 색상'}
@@ -178,6 +234,72 @@ export default function RpmChart({ cycles }: RpmChartProps) {
             gridcolor: '#313244',
             zeroline: false,
           },
+          shapes: [
+            // Background shapes for operation segments
+            ...(plotData.operationSegments || []).map(segment => ({
+              type: 'rect' as const,
+              xref: 'x' as const,
+              yref: 'paper' as const,
+              x0: segment.start,
+              x1: segment.end,
+              y0: 0,
+              y1: 1,
+              fillcolor: '#2563EB', // Brand Blue
+              opacity: 0.08,
+              layer: 'below' as const,
+              line: { width: 0 },
+            })),
+            // Vertical grid lines for each hour
+            ...[7, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 19].map(hour => ({
+              type: 'line' as const,
+              xref: 'x' as const,
+              yref: 'paper' as const,
+              x0: hour,
+              x1: hour,
+              y0: 0,
+              y1: 1,
+              line: {
+                color: '#475569', // Body Text
+                width: 1,
+                dash: 'dot' as const,
+              },
+              opacity: 0.2,
+              layer: 'below' as const,
+            })),
+            // Emphasized line for 12:00 (lunch time)
+            {
+              type: 'line' as const,
+              xref: 'x' as const,
+              yref: 'paper' as const,
+              x0: 12,
+              x1: 12,
+              y0: 0,
+              y1: 1,
+              line: {
+                color: '#64748B', // Secondary Text
+                width: 2,
+                dash: 'dot' as const,
+              },
+              opacity: 0.4,
+              layer: 'below' as const,
+            },
+          ],
+          annotations: [
+            // Operation duration annotations
+            ...(plotData.operationSegments || []).map(segment => ({
+              x: (segment.start + segment.end) / 2,
+              y: 1,
+              xref: 'x' as const,
+              yref: 'paper' as const,
+              text: `${segment.duration.toFixed(1)}h`,
+              showarrow: false,
+              font: {
+                size: 10,
+                color: '#64748B',
+              },
+              yshift: -10,
+            })),
+          ],
           hovermode: 'closest',
           showlegend: true,
           legend: {

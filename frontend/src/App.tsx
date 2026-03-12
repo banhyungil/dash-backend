@@ -55,6 +55,18 @@ export default function App() {
     );
   }
 
+  // Format date with day of week
+  const formatDateWithDayOfWeek = (dateStr: string): string => {
+    try {
+      const date = new Date(dateStr);
+      const days = ['일', '월', '화', '수', '목', '금', '토'];
+      const dayOfWeek = days[date.getDay()];
+      return `${dateStr} (${dayOfWeek}) 생산 리포트`;
+    } catch {
+      return `${dateStr} 생산 리포트`;
+    }
+  };
+
   return (
     <div style={styles.app}>
       {/* Header */}
@@ -63,7 +75,7 @@ export default function App() {
           ← Back
         </button>
         <div style={styles.headerInfo}>
-          <h2 style={styles.title}>{dailyData.date}</h2>
+          <h2 style={styles.title}>{formatDateWithDayOfWeek(dailyData.date)}</h2>
           <p style={styles.subtitle}>
             Device: {dailyData.device} | Cycles: {dailyData.total_cycles} (Expected filtered)
           </p>
@@ -136,7 +148,7 @@ const styles: Record<string, React.CSSProperties> = {
     width: 40,
     height: 40,
     border: '4px solid #313244',
-    borderTop: '4px solid #89b4fa',
+    borderTop: '4px solid #2563EB', // Brand Blue
     borderRadius: '50%',
     animation: 'spin 1s linear infinite',
   },
@@ -166,7 +178,7 @@ const styles: Record<string, React.CSSProperties> = {
   title: {
     fontSize: 20,
     fontWeight: 700,
-    color: '#89b4fa',
+    color: '#3B82F6', // Accent Blue
     marginBottom: 4,
   },
   subtitle: {
@@ -189,8 +201,8 @@ const styles: Record<string, React.CSSProperties> = {
     transition: 'all 0.2s',
   },
   tabActive: {
-    background: '#89b4fa',
-    color: '#1e1e2e',
+    background: '#2563EB', // Brand Blue
+    color: '#FFFFFF',
   },
   chartArea: {
     flex: 1,
