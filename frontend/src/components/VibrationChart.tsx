@@ -54,22 +54,18 @@ export default function VibrationChart({ cycles }: VibrationChartProps) {
   const plotData = useMemo(() => {
     if (cycles.length === 0) {
       return {
-        pulse_x_time: [], pulse_x_data: [],
-        pulse_z_time: [], pulse_z_data: [],
-        vib_x_time: [], vib_x_data: [],
-        vib_z_time: [], vib_z_data: [],
+        pulse_x_traces: [],
+        pulse_z_traces: [],
+        vib_x_traces: [],
+        vib_z_traces: [],
         highVibEvents: [],
       };
     }
 
-    const pulse_x_time: number[] = [];
-    const pulse_x_data: number[] = [];
-    const pulse_z_time: number[] = [];
-    const pulse_z_data: number[] = [];
-    const vib_x_time: number[] = [];
-    const vib_x_data: number[] = [];
-    const vib_z_time: number[] = [];
-    const vib_z_data: number[] = [];
+    const pulse_x_traces: Array<{ time: number[], data: number[] }> = [];
+    const pulse_z_traces: Array<{ time: number[], data: number[] }> = [];
+    const vib_x_traces: Array<{ time: number[], data: number[] }> = [];
+    const vib_z_traces: Array<{ time: number[], data: number[] }> = [];
     const highVibEvents: Array<{ time: number; value: number; mpm: number; timestamp: string }> = [];
 
     const VIB_SAMPLE_RATE = 1000; // Hz
@@ -101,14 +97,20 @@ export default function VibrationChart({ cycles }: VibrationChartProps) {
       const pulse_x_offset = getGravityOffset(session, 'x');
       const pulse_z_offset = getGravityOffset(session, 'z');
 
+      // Create separate arrays for this cycle
+      const cycle_pulse_x_time: number[] = [];
+      const cycle_pulse_x_data: number[] = [];
+      const cycle_pulse_z_time: number[] = [];
+      const cycle_pulse_z_data: number[] = [];
+
       // Pulse accelerometer data (comes first)
       cycle.pulse_timeline.forEach((time, i) => {
         const absoluteTime = cycleStartHours + time / 3600;
 
         if (i < cycle.pulse_accel_x.length) {
           const correctedVal = cycle.pulse_accel_x[i] - pulse_x_offset;
-          pulse_x_time.push(absoluteTime);
-          pulse_x_data.push(correctedVal);
+          cycle_pulse_x_time.push(absoluteTime);
+          cycle_pulse_x_data.push(correctedVal);
 
           // Check for high vibration (> 0.3g)
           if (Math.abs(correctedVal) > 0.3) {
@@ -122,8 +124,8 @@ export default function VibrationChart({ cycles }: VibrationChartProps) {
         }
         if (i < cycle.pulse_accel_z.length) {
           const correctedVal = cycle.pulse_accel_z[i] - pulse_z_offset;
-          pulse_z_time.push(absoluteTime);
-          pulse_z_data.push(correctedVal);
+          cycle_pulse_z_time.push(absoluteTime);
+          cycle_pulse_z_data.push(correctedVal);
 
           // Check for high vibration (> 0.3g)
           if (Math.abs(correctedVal) > 0.3) {
@@ -137,6 +139,14 @@ export default function VibrationChart({ cycles }: VibrationChartProps) {
         }
       });
 
+      // Add this cycle's pulse traces
+      if (cycle_pulse_x_time.length > 0) {
+        pulse_x_traces.push({ time: cycle_pulse_x_time, data: cycle_pulse_x_data });
+      }
+      if (cycle_pulse_z_time.length > 0) {
+        pulse_z_traces.push({ time: cycle_pulse_z_time, data: cycle_pulse_z_data });
+      }
+
       // Calculate pulse duration for VIB offset
       const pulse_duration = cycle.pulse_timeline.length > 0
         ? cycle.pulse_timeline[cycle.pulse_timeline.length - 1]
@@ -149,11 +159,16 @@ export default function VibrationChart({ cycles }: VibrationChartProps) {
       const vib_x_offset = getGravityOffset(session, 'x');
       const vib_z_offset = getGravityOffset(session, 'z');
 
+      const cycle_vib_x_time: number[] = [];
+      const cycle_vib_x_data: number[] = [];
+      const cycle_vib_z_time: number[] = [];
+      const cycle_vib_z_data: number[] = [];
+
       cycle.vib_accel_x.forEach((val, i) => {
         const time = vib_start_hours + (i / VIB_SAMPLE_RATE / 3600);
         const correctedVal = val - vib_x_offset;
-        vib_x_time.push(time);
-        vib_x_data.push(correctedVal);
+        cycle_vib_x_time.push(time);
+        cycle_vib_x_data.push(correctedVal);
 
         // Check for high vibration (> 0.3g)
         if (Math.abs(correctedVal) > 0.3) {
@@ -169,8 +184,8 @@ export default function VibrationChart({ cycles }: VibrationChartProps) {
       cycle.vib_accel_z.forEach((val, i) => {
         const time = vib_start_hours + (i / VIB_SAMPLE_RATE / 3600);
         const correctedVal = val - vib_z_offset;
-        vib_z_time.push(time);
-        vib_z_data.push(correctedVal);
+        cycle_vib_z_time.push(time);
+        cycle_vib_z_data.push(correctedVal);
 
         // Check for high vibration (> 0.3g)
         if (Math.abs(correctedVal) > 0.3) {
@@ -182,13 +197,21 @@ export default function VibrationChart({ cycles }: VibrationChartProps) {
           });
         }
       });
+
+      // Add this cycle's VIB traces
+      if (cycle_vib_x_time.length > 0) {
+        vib_x_traces.push({ time: cycle_vib_x_time, data: cycle_vib_x_data });
+      }
+      if (cycle_vib_z_time.length > 0) {
+        vib_z_traces.push({ time: cycle_vib_z_time, data: cycle_vib_z_data });
+      }
     });
 
     return {
-      pulse_x_time, pulse_x_data,
-      pulse_z_time, pulse_z_data,
-      vib_x_time, vib_x_data,
-      vib_z_time, vib_z_data,
+      pulse_x_traces,
+      pulse_z_traces,
+      vib_x_traces,
+      vib_z_traces,
       highVibEvents,
     };
   }, [cycles]);
@@ -215,55 +238,13 @@ export default function VibrationChart({ cycles }: VibrationChartProps) {
     }
   }, [xRange]);
 
-  // Insert null breaks for gaps > 15 minutes
-  const insertGapBreaks = (timeData: number[], valueData: number[]): { time: (number | null)[], value: (number | null)[] } => {
-    if (timeData.length === 0) {
-      return { time: [], value: [] };
-    }
-
-    const result_time: (number | null)[] = [];
-    const result_value: (number | null)[] = [];
-
-    for (let i = 0; i < timeData.length; i++) {
-      result_time.push(timeData[i]);
-      result_value.push(valueData[i]);
-
-      // Check gap to next point
-      if (i < timeData.length - 1) {
-        const gap = timeData[i + 1] - timeData[i];
-        if (gap > 0.25) { // 15 minutes = 0.25 hours
-          // Insert null to break the line
-          result_time.push(null);
-          result_value.push(null);
-        }
-      }
-    }
-
-    return { time: result_time, value: result_value };
-  };
-
-  // Apply LOD decimation to plot data
+  // Apply LOD decimation to each cycle trace separately
   const decimatedData = useMemo(() => {
-    const pulse_x = decimateMinMax(plotData.pulse_x_time, plotData.pulse_x_data, decimationFactor);
-    const pulse_z = decimateMinMax(plotData.pulse_z_time, plotData.pulse_z_data, decimationFactor);
-    const vib_x = decimateMinMax(plotData.vib_x_time, plotData.vib_x_data, decimationFactor);
-    const vib_z = decimateMinMax(plotData.vib_z_time, plotData.vib_z_data, decimationFactor);
-
-    // Insert gap breaks
-    const pulse_x_gapped = insertGapBreaks(pulse_x.time, pulse_x.value);
-    const pulse_z_gapped = insertGapBreaks(pulse_z.time, pulse_z.value);
-    const vib_x_gapped = insertGapBreaks(vib_x.time, vib_x.value);
-    const vib_z_gapped = insertGapBreaks(vib_z.time, vib_z.value);
-
     return {
-      pulse_x_time: pulse_x_gapped.time,
-      pulse_x_data: pulse_x_gapped.value,
-      pulse_z_time: pulse_z_gapped.time,
-      pulse_z_data: pulse_z_gapped.value,
-      vib_x_time: vib_x_gapped.time,
-      vib_x_data: vib_x_gapped.value,
-      vib_z_time: vib_z_gapped.time,
-      vib_z_data: vib_z_gapped.value,
+      pulse_x_traces: plotData.pulse_x_traces.map(trace => decimateMinMax(trace.time, trace.data, decimationFactor)),
+      pulse_z_traces: plotData.pulse_z_traces.map(trace => decimateMinMax(trace.time, trace.data, decimationFactor)),
+      vib_x_traces: plotData.vib_x_traces.map(trace => decimateMinMax(trace.time, trace.data, decimationFactor)),
+      vib_z_traces: plotData.vib_z_traces.map(trace => decimateMinMax(trace.time, trace.data, decimationFactor)),
     };
   }, [plotData, decimationFactor]);
 
@@ -288,55 +269,99 @@ export default function VibrationChart({ cycles }: VibrationChartProps) {
   const sampledHighVibEvents = plotData.highVibEvents.filter((_, i) => i % 100 === 0);
 
   // Create traces based on color mode (using decimated data)
-  const traces = colorBySensor ? [
+  // Each cycle gets its own trace to prevent lines connecting between cycles
+  const traces: any[] = [];
+
+  if (colorBySensor) {
     // Color by sensor type (using Palette colors)
-    {
-      x: decimatedData.pulse_x_time,
-      y: decimatedData.pulse_x_data,
-      type: 'scattergl' as const,
-      mode: 'lines' as const,
-      name: 'Pulse X',
-      line: { color: '#EF4444', width: 1 }, // Alert Red
-      connectgaps: false,
-    },
-    {
-      x: decimatedData.pulse_z_time,
-      y: decimatedData.pulse_z_data,
-      type: 'scattergl' as const,
-      mode: 'lines' as const,
-      name: 'Pulse Z',
-      line: { color: '#F49E0A', width: 1 }, // Trend Orange
-      connectgaps: false,
-    },
-    {
-      x: decimatedData.vib_x_time,
-      y: decimatedData.vib_x_data,
-      type: 'scattergl' as const,
-      mode: 'lines' as const,
-      name: 'VIB X',
-      line: { color: '#2563EB', width: 1 }, // Brand Blue
-      connectgaps: false,
-    },
-    {
-      x: decimatedData.vib_z_time,
-      y: decimatedData.vib_z_data,
-      type: 'scattergl' as const,
-      mode: 'lines' as const,
-      name: 'VIB Z',
-      line: { color: '#0FB880', width: 1 }, // Green Accent
-      connectgaps: false,
-    },
-    // High vibration markers
-    {
-      x: sampledHighVibEvents.map(e => e.time),
-      y: sampledHighVibEvents.map(e => e.value),
-      type: 'scattergl' as const,
-      mode: 'markers' as const,
-      name: 'High Vib (>0.3g)',
-      marker: {
-        symbol: 'diamond',
-        size: 10,
-        color: '#EF4444',
+    // Pulse X traces
+    decimatedData.pulse_x_traces.forEach((trace, i) => {
+      traces.push({
+        x: trace.time,
+        y: trace.value,
+        type: 'scattergl' as const,
+        mode: 'lines' as const,
+        name: 'Pulse X',
+        line: { color: '#EF4444', width: 1 }, // Alert Red
+        showlegend: i === 0, // Only show in legend once
+        legendgroup: 'pulse_x',
+      });
+    });
+
+    // Pulse Z traces
+    decimatedData.pulse_z_traces.forEach((trace, i) => {
+      traces.push({
+        x: trace.time,
+        y: trace.value,
+        type: 'scattergl' as const,
+        mode: 'lines' as const,
+        name: 'Pulse Z',
+        line: { color: '#F49E0A', width: 1 }, // Trend Orange
+        showlegend: i === 0,
+        legendgroup: 'pulse_z',
+      });
+    });
+
+    // VIB X traces
+    decimatedData.vib_x_traces.forEach((trace, i) => {
+      traces.push({
+        x: trace.time,
+        y: trace.value,
+        type: 'scattergl' as const,
+        mode: 'lines' as const,
+        name: 'VIB X',
+        line: { color: '#2563EB', width: 1 }, // Brand Blue
+        showlegend: i === 0,
+        legendgroup: 'vib_x',
+      });
+    });
+
+    // VIB Z traces
+    decimatedData.vib_z_traces.forEach((trace, i) => {
+      traces.push({
+        x: trace.time,
+        y: trace.value,
+        type: 'scattergl' as const,
+        mode: 'lines' as const,
+        name: 'VIB Z',
+        line: { color: '#0FB880', width: 1 }, // Green Accent
+        showlegend: i === 0,
+        legendgroup: 'vib_z',
+      });
+    });
+  } else {
+    // Single color for all - still separate traces per cycle to avoid connecting
+    const allTraces = [
+      ...decimatedData.pulse_x_traces,
+      ...decimatedData.pulse_z_traces,
+      ...decimatedData.vib_x_traces,
+      ...decimatedData.vib_z_traces,
+    ];
+
+    allTraces.forEach(trace => {
+      traces.push({
+        x: trace.time,
+        y: trace.value,
+        type: 'scattergl' as const,
+        mode: 'lines' as const,
+        name: 'All Sensors',
+        line: { color: '#2563EB', width: 1 }, // Brand Blue
+        showlegend: false,
+      });
+    });
+  }
+
+  // High vibration markers
+  traces.push({
+    x: sampledHighVibEvents.map(e => e.time),
+    y: sampledHighVibEvents.map(e => e.value),
+    type: 'scattergl' as const,
+    mode: 'markers' as const,
+    name: 'High Vib (>0.3g)',
+    marker: {
+      symbol: 'diamond',
+      size: 10,
+      color: '#EF4444',
         line: {
           color: '#FFFFFF',
           width: 1
@@ -348,43 +373,7 @@ export default function VibrationChart({ cycles }: VibrationChartProps) {
         return `High Vibration Event<br>Time: ${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}<br>Value: ${e.value.toFixed(3)}g<br>MPM: ${e.mpm.toFixed(1)}<br>Timestamp: ${e.timestamp}`;
       }),
       hoverinfo: 'text' as const,
-    },
-  ] : [
-    // Single color for all
-    {
-      x: [...decimatedData.pulse_x_time, ...decimatedData.pulse_z_time, ...decimatedData.vib_x_time, ...decimatedData.vib_z_time],
-      y: [...decimatedData.pulse_x_data, ...decimatedData.pulse_z_data, ...decimatedData.vib_x_data, ...decimatedData.vib_z_data],
-      type: 'scattergl' as const,
-      mode: 'lines' as const,
-      name: 'All Sensors',
-      line: { color: '#2563EB', width: 1 }, // Brand Blue
-      showlegend: false,
-      connectgaps: false,
-    },
-    // High vibration markers
-    {
-      x: sampledHighVibEvents.map(e => e.time),
-      y: sampledHighVibEvents.map(e => e.value),
-      type: 'scattergl' as const,
-      mode: 'markers' as const,
-      name: 'High Vib (>0.3g)',
-      marker: {
-        symbol: 'diamond',
-        size: 10,
-        color: '#EF4444',
-        line: {
-          color: '#FFFFFF',
-          width: 1
-        }
-      },
-      text: sampledHighVibEvents.map(e => {
-        const hours = Math.floor(e.time);
-        const minutes = Math.floor((e.time - hours) * 60);
-        return `High Vibration Event<br>Time: ${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}<br>Value: ${e.value.toFixed(3)}g<br>MPM: ${e.mpm.toFixed(1)}<br>Timestamp: ${e.timestamp}`;
-      }),
-      hoverinfo: 'text' as const,
-    },
-  ];
+    });
 
   const totalHighVibEvents = plotData.highVibEvents.length;
 
