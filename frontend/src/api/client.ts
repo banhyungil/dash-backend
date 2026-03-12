@@ -24,6 +24,10 @@ export interface CycleData {
   rpm_max: number;
   rpm_timeline: number[];
   rpm_data: number[];
+  mpm_mean: number;
+  mpm_min: number;
+  mpm_max: number;
+  mpm_data: number[];
   duration_ms: number;
   set_count: number;
   expected_count: number;

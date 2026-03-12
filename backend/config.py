@@ -13,6 +13,9 @@ DEFAULT_SHAFT_DIA = 50     # mm
 DEFAULT_PATTERN_WIDTH = 10 # mm
 DEFAULT_TARGET_RPM = 100
 
+# Roll diameter for MPM calculation
+ROLL_DIAMETER_MM = 140  # mm (actual roll diameter, different from shaft_dia)
+
 # Sampling
 VIB_SAMPLE_RATE = 1000  # Hz (ADXL355)
 RPM_READ_OFFSET = 2     # Skip first N pulses

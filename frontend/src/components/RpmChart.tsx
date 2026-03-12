@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import Plot from 'react-plotly.js';
 import type { CycleData } from '../api/client';
 
@@ -8,6 +8,7 @@ interface RpmChartProps {
 }
 
 export default function RpmChart({ cycles }: RpmChartProps) {
+  const [colorByDevice, setColorByDevice] = useState(true);
   const plotData = useMemo(() => {
     if (cycles.length === 0) {
       return {};
@@ -41,7 +42,7 @@ export default function RpmChart({ cycles }: RpmChartProps) {
       }
 
       const cycleStartHours = getHoursFromMidnight(cycle.timestamp);
-      const avgRpm = cycle.rpm_mean;
+      const avgMpm = cycle.mpm_mean;
 
       // Format time for hover text
       const hours = Math.floor(cycleStartHours);
@@ -50,10 +51,11 @@ export default function RpmChart({ cycles }: RpmChartProps) {
       const timeStr = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
 
       sessionData[session].x.push(cycleStartHours);
-      sessionData[session].y.push(avgRpm);
+      sessionData[session].y.push(avgMpm);
       sessionData[session].text.push(
         `Time: ${timeStr}<br>` +
-        `RPM: ${avgRpm.toFixed(1)}<br>` +
+        `MPM: ${avgMpm.toFixed(2)}<br>` +
+        `RPM: ${cycle.rpm_mean.toFixed(1)}<br>` +
         `Session: ${session}<br>` +
         `Timestamp: ${cycle.timestamp}<br>` +
         `Expected: ${cycle.expected_count} (Actual: ${cycle.set_count})`
@@ -101,26 +103,56 @@ export default function RpmChart({ cycles }: RpmChartProps) {
     showlegend: false,
   };
 
-  // Create marker traces for each session (for coloring)
-  const markerTraces = Object.entries(plotData.sessionData || {}).map(([session, data]) => ({
-    x: data.x,
-    y: data.y,
-    type: 'scattergl' as const,
-    mode: 'markers' as const,
-    marker: {
-      size: 6,
-      color: plotData.deviceColors?.[session] || '#cdd6f4',
-    },
-    text: data.text,
-    hoverinfo: 'text' as const,
-    name: session,
-    showlegend: true,
-  }));
-
-  const traces = [lineTrace, ...markerTraces];
+  let traces;
+  if (colorByDevice) {
+    // Create marker traces for each session (for coloring)
+    const markerTraces = Object.entries(plotData.sessionData || {}).map(([session, data]) => ({
+      x: data.x,
+      y: data.y,
+      type: 'scattergl' as const,
+      mode: 'markers' as const,
+      marker: {
+        size: 6,
+        color: plotData.deviceColors?.[session] || '#cdd6f4',
+      },
+      text: data.text,
+      hoverinfo: 'text' as const,
+      name: session,
+      showlegend: true,
+    }));
+    traces = [lineTrace, ...markerTraces];
+  } else {
+    // Single color mode - all points in one trace
+    const singleTrace = {
+      x: allPoints.map(p => p.x),
+      y: allPoints.map(p => p.y),
+      type: 'scattergl' as const,
+      mode: 'markers' as const,
+      marker: {
+        size: 6,
+        color: '#89b4fa',
+      },
+      text: allPoints.map(p => p.text),
+      hoverinfo: 'text' as const,
+      name: 'All',
+      showlegend: false,
+    };
+    traces = [lineTrace, singleTrace];
+  }
 
   return (
     <div style={styles.container}>
+      <div style={styles.controls}>
+        <button
+          onClick={() => setColorByDevice(!colorByDevice)}
+          style={{
+            ...styles.toggleButton,
+            backgroundColor: colorByDevice ? '#89b4fa' : '#45475a',
+          }}
+        >
+          {colorByDevice ? 'Device별 색상' : '단일 색상'}
+        </button>
+      </div>
       <Plot
         data={traces}
         layout={{
@@ -133,16 +165,16 @@ export default function RpmChart({ cycles }: RpmChartProps) {
             title: 'Time',
             gridcolor: '#313244',
             zeroline: false,
-            range: [0, 24], // 24-hour view
+            range: [6, 20], // 06:00 ~ 20:00 view
             tickmode: 'linear',
-            tick0: 0,
+            tick0: 6,
             dtick: 1, // Show every hour
             tickformat: '%H:%M',
-            tickvals: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24],
-            ticktext: ['00:00', '01:00', '02:00', '03:00', '04:00', '05:00', '06:00', '07:00', '08:00', '09:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00', '18:00', '19:00', '20:00', '21:00', '22:00', '23:00', '24:00'],
+            tickvals: [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
+            ticktext: ['06:00', '07:00', '08:00', '09:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00', '18:00', '19:00', '20:00'],
           },
           yaxis: {
-            title: 'RPM',
+            title: 'MPM (Meter Per Minute)',
             gridcolor: '#313244',
             zeroline: false,
           },
@@ -172,6 +204,26 @@ const styles: Record<string, React.CSSProperties> = {
     height: '100%',
     display: 'flex',
     flexDirection: 'column',
+    position: 'relative',
+  },
+  controls: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    zIndex: 1000,
+    display: 'flex',
+    gap: 8,
+  },
+  toggleButton: {
+    padding: '6px 12px',
+    border: 'none',
+    borderRadius: 4,
+    color: '#cdd6f4',
+    fontSize: 12,
+    fontWeight: 500,
+    cursor: 'pointer',
+    transition: 'all 0.2s',
+    fontFamily: 'Segoe UI, Noto Sans KR, sans-serif',
   },
   empty: {
     display: 'flex',

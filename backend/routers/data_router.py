@@ -1,17 +1,23 @@
 """API endpoints for day viewer."""
 import sys
 import json
+import math
 from pathlib import Path
 from fastapi import APIRouter, Query, HTTPException
 
 # Import all services from day_viewer (all copied from viewer)
-from config import DEFAULT_SHAFT_DIA, DEFAULT_PATTERN_WIDTH, DEFAULT_TARGET_RPM, DATA_DIR, DEVICE_SESSION_MAP
+from config import DEFAULT_SHAFT_DIA, DEFAULT_PATTERN_WIDTH, DEFAULT_TARGET_RPM, DATA_DIR, DEVICE_SESSION_MAP, ROLL_DIAMETER_MM
 from services.folder_scanner import get_available_months, get_devices_for_month, get_dates_for_month_device, get_csv_files
 from services.cached_csv_parser import parse_pulse_cached, parse_vib_cached
 from services.rpm_service import process_pulse_compact_to_rpm
 from services.expected_filter import is_expected_valid, calculate_expected_pulse_count
 from services.session_merger import merge_sessions_by_timestamp, calculate_continuous_timeline
 from services.test_export import copy_raw_csv_files, create_integrated_csv_raw
+
+
+def calc_mpm_from_rpm(rpm: float, roll_dia: float) -> float:
+    """RPM + roll_dia(mm) -> MPM"""
+    return round(rpm * math.pi * roll_dia / 1000, 2)
 
 # Load device settings from viewer's settings file
 current_file = Path(__file__).resolve()
@@ -136,6 +142,12 @@ def api_daily_data(
                 # Map device to session name (R1, R2, R3, R4)
                 session_name = DEVICE_SESSION_MAP.get(device, device)
 
+                # Calculate MPM using ROLL_DIAMETER_MM (not shaft_dia)
+                mpm_mean = calc_mpm_from_rpm(rpm_mean, ROLL_DIAMETER_MM)
+                mpm_min = calc_mpm_from_rpm(rpm_result["rpmMin"], ROLL_DIAMETER_MM)
+                mpm_max = calc_mpm_from_rpm(rpm_result["rpmMax"], ROLL_DIAMETER_MM)
+                mpm_data = [calc_mpm_from_rpm(rpm, ROLL_DIAMETER_MM) for rpm in rpm_result["dataRPM"]]
+
                 all_pulse_cycles.append({
                     "timestamp": parsed["timestamps"][i],
                     "session": session_name,
@@ -147,6 +159,10 @@ def api_daily_data(
                     "rpm_max": round(rpm_result["rpmMax"], 2),
                     "rpm_timeline": rpm_result["timeLine"],
                     "rpm_data": rpm_result["dataRPM"],
+                    "mpm_mean": mpm_mean,
+                    "mpm_min": mpm_min,
+                    "mpm_max": mpm_max,
+                    "mpm_data": mpm_data,
                     "duration_ms": round(rpm_result["durationms"], 2),
                     "set_count": set_count,
                     "expected_count": expected_count,
