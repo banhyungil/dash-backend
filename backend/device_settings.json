@@ -1,0 +1,30 @@
+{
+  "0013A20041F71B01": {
+    "mac": "0013A20041F71B01",
+    "shaft_dia": 49.0,
+    "pattern_width": 3.0,
+    "target_rpm": 100.0,
+    "label": "R1"
+  },
+  "0013A20041F9D466": {
+    "mac": "0013A20041F9D466",
+    "shaft_dia": 49.0,
+    "pattern_width": 3.0,
+    "target_rpm": 100.0,
+    "label": "R2"
+  },
+  "0013A20041F98275": {
+    "mac": "0013A20041F98275",
+    "shaft_dia": 49.0,
+    "pattern_width": 5.0,
+    "target_rpm": 100.0,
+    "label": "R3"
+  },
+  "0013A20041F9D4F8": {
+    "mac": "0013A20041F9D4F8",
+    "shaft_dia": 49.0,
+    "pattern_width": 5.0,
+    "target_rpm": 100.0,
+    "label": "R4"
+  }
+}
