@@ -32,8 +32,43 @@ export default function RpmChart({ cycles }: RpmChartProps) {
       return hours + minutes / 60 + seconds / 3600 + ms / 3600000;
     };
 
+    // Get 10-minute timeslot (returns hour as decimal)
+    const get10MinSlot = (timestamp: string): number => {
+      const date = new Date(timestamp);
+      const hour = date.getHours();
+      const minute = date.getMinutes();
+      const slotMinute = Math.floor(minute / 10) * 10;
+      return hour + slotMinute / 60;
+    };
+
+    // Get device offset within 10-minute slot (in hours)
+    const getDeviceOffset = (session: string): number => {
+      const offsets: Record<string, number> = {
+        'R1': 0,      // 0 minutes
+        'R2': 2 / 60, // 2 minutes
+        'R3': 4 / 60, // 4 minutes
+        'R4': 6 / 60, // 6 minutes
+      };
+      return offsets[session] || 0;
+    };
+
     // Group by session
     const sessionData: Record<string, { x: number[]; y: number[]; text: string[] }> = {};
+
+    // Store cycle rectangles for rendering
+    const cycleRects: Array<{
+      x0: number;
+      x1: number;
+      y0: number;
+      y1: number;
+      mpm: number;
+      rpm: number;
+      session: string;
+      timeStr: string;
+      timestamp: string;
+      duration_s: number;
+      color: string;
+    }> = [];
 
     cycles.forEach((cycle) => {
       const session = cycle.session;
@@ -41,25 +76,47 @@ export default function RpmChart({ cycles }: RpmChartProps) {
         sessionData[session] = { x: [], y: [], text: [] };
       }
 
-      const cycleStartHours = getHoursFromMidnight(cycle.timestamp);
-      const avgMpm = cycle.mpm_mean;
+      const avgMpm = Math.round(cycle.mpm_mean); // Round to integer
+      const avgRpm = cycle.rpm_mean;
+      const durationSeconds = 120; // Fixed 2 minutes
+      const durationHours = durationSeconds / 3600;
 
-      // Format time for hover text
+      // Calculate position based on 10-minute slot + device offset
+      const slotStart = get10MinSlot(cycle.timestamp);
+      const deviceOffset = getDeviceOffset(session);
+      const cycleStartHours = slotStart + deviceOffset;
+
+      // Format time for hover text (using slot-based time)
       const hours = Math.floor(cycleStartHours);
       const minutes = Math.floor((cycleStartHours - hours) * 60);
       const seconds = Math.floor(((cycleStartHours - hours) * 60 - minutes) * 60);
       const timeStr = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
 
+      // Store for legacy point display (for hover)
       sessionData[session].x.push(cycleStartHours);
       sessionData[session].y.push(avgMpm);
       sessionData[session].text.push(
         `Time: ${timeStr}<br>` +
-        `MPM: ${avgMpm.toFixed(2)}<br>` +
-        `RPM: ${cycle.rpm_mean.toFixed(1)}<br>` +
-        `Session: ${session}<br>` +
-        `Timestamp: ${cycle.timestamp}<br>` +
-        `Expected: ${cycle.expected_count} (Actual: ${cycle.set_count})`
+        `Duration: ${durationSeconds.toFixed(1)}s<br>` +
+        `MPM: ${avgMpm}<br>` +
+        `RPM: ${avgRpm.toFixed(1)}<br>` +
+        `Session: ${session}`
       );
+
+      // Store rectangle data
+      cycleRects.push({
+        x0: cycleStartHours,
+        x1: cycleStartHours + durationHours,
+        y0: avgMpm - 0.1, // Very thin horizontal bar
+        y1: avgMpm + 0.1,
+        mpm: avgMpm,
+        rpm: avgRpm,
+        session: session,
+        timeStr: timeStr,
+        timestamp: cycle.timestamp,
+        duration_s: durationSeconds,
+        color: deviceColors[session] || '#F49E0A'
+      });
     });
 
     // Calculate operation segments for background shapes
@@ -98,7 +155,7 @@ export default function RpmChart({ cycles }: RpmChartProps) {
       });
     }
 
-    return { sessionData, deviceColors, operationSegments };
+    return { sessionData, deviceColors, operationSegments, cycleRects };
   }, [cycles]);
 
   if (cycles.length === 0) {
@@ -109,7 +166,7 @@ export default function RpmChart({ cycles }: RpmChartProps) {
     );
   }
 
-  // Create combined time-ordered line trace
+  // Create invisible scatter trace for hover (at center of each bar)
   const allPoints: Array<{ x: number; y: number; text: string; session: string }> = [];
   Object.entries(plotData.sessionData || {}).forEach(([session, data]) => {
     data.x.forEach((x, i) => {
@@ -122,79 +179,30 @@ export default function RpmChart({ cycles }: RpmChartProps) {
     });
   });
 
-  // Sort by time
-  allPoints.sort((a, b) => a.x - b.x);
-
-  // Insert null breaks for gaps > 15 minutes (0.25 hours)
-  const lineX: (number | null)[] = [];
-  const lineY: (number | null)[] = [];
-
-  for (let i = 0; i < allPoints.length; i++) {
-    lineX.push(allPoints[i].x);
-    lineY.push(allPoints[i].y);
-
-    // Check gap to next point
-    if (i < allPoints.length - 1) {
-      const gap = allPoints[i + 1].x - allPoints[i].x;
-      if (gap > 0.25) { // 15 minutes = 0.25 hours
-        // Insert null to break the line
-        lineX.push(null);
-        lineY.push(null);
-      }
-    }
-  }
-
-  // Create line trace (all sessions connected by time)
-  const lineTrace = {
-    x: lineX,
-    y: lineY,
+  // Create hover trace (invisible markers for hover info)
+  const hoverTrace = {
+    x: allPoints.map(p => p.x),
+    y: allPoints.map(p => p.y),
     type: 'scattergl' as const,
-    mode: 'lines' as const,
-    line: {
-      color: '#475569', // Body Text from Palette
-      width: 1,
+    mode: 'markers' as const,
+    marker: {
+      size: 1,
+      color: 'rgba(0,0,0,0)', // Invisible
     },
-    hoverinfo: 'skip' as const,
+    text: allPoints.map(p => p.text),
+    hoverinfo: 'text' as const,
     showlegend: false,
-    connectgaps: false,
   };
 
-  let traces;
-  if (colorByDevice) {
-    // Create marker traces for each session (for coloring)
-    const markerTraces = Object.entries(plotData.sessionData || {}).map(([session, data]) => ({
-      x: data.x,
-      y: data.y,
-      type: 'scattergl' as const,
-      mode: 'markers' as const,
-      marker: {
-        size: 6,
-        color: plotData.deviceColors?.[session] || '#cdd6f4',
-      },
-      text: data.text,
-      hoverinfo: 'text' as const,
-      name: session,
-      showlegend: true,
-    }));
-    traces = [lineTrace, ...markerTraces];
-  } else {
-    // Single color mode - all points in one trace
-    const singleTrace = {
-      x: allPoints.map(p => p.x),
-      y: allPoints.map(p => p.y),
-      type: 'scattergl' as const,
-      mode: 'markers' as const,
-      marker: {
-        size: 6,
-        color: '#F49E0A', // Trend Orange from Palette
-      },
-      text: allPoints.map(p => p.text),
-      hoverinfo: 'text' as const,
-      name: 'All',
-      showlegend: false,
-    };
-    traces = [lineTrace, singleTrace];
-  }
+  const traces = [hoverTrace];
+
+  // Calculate Y-axis range
+  const allMpmValues = cycles.map(c => c.mpm_mean);
+  const minMpm = allMpmValues.length > 0 ? Math.min(...allMpmValues) : 0;
+  const maxMpm = allMpmValues.length > 0 ? Math.max(...allMpmValues) : 35;
+  const yMargin = (maxMpm - minMpm) * 0.1; // 10% margin
+  const yMin = Math.max(0, minMpm - yMargin);
+  const yMax = maxMpm + yMargin;
 
   return (
     <div style={styles.container}>
@@ -213,7 +221,7 @@ export default function RpmChart({ cycles }: RpmChartProps) {
         data={traces}
         layout={{
           autosize: true,
-          margin: { l: 60, r: 40, t: 40, b: 60 },
+          margin: { l: 80, r: 40, t: 60, b: 60 },
           paper_bgcolor: '#1e1e2e',
           plot_bgcolor: '#181825',
           font: { color: '#cdd6f4', family: 'Segoe UI, Noto Sans KR, sans-serif' },
@@ -224,15 +232,17 @@ export default function RpmChart({ cycles }: RpmChartProps) {
             range: [6, 20], // 06:00 ~ 20:00 view
             tickmode: 'linear',
             tick0: 6,
-            dtick: 1, // Show every hour
+            dtick: 2, // Show every 2 hours
             tickformat: '%H:%M',
-            tickvals: [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
-            ticktext: ['06:00', '07:00', '08:00', '09:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00', '18:00', '19:00', '20:00'],
+            tickvals: [6, 8, 10, 12, 14, 16, 18, 20],
+            ticktext: ['06:00', '08:00', '10:00', '12:00', '14:00', '16:00', '18:00', '20:00'],
           },
           yaxis: {
             title: 'MPM (Meter Per Minute)',
             gridcolor: '#313244',
             zeroline: false,
+            range: [yMin, yMax],
+            tickformat: 'd', // Display as integer
           },
           shapes: [
             // Background shapes for operation segments
@@ -245,12 +255,29 @@ export default function RpmChart({ cycles }: RpmChartProps) {
               y0: 0,
               y1: 1,
               fillcolor: '#2563EB', // Brand Blue
-              opacity: 0.08,
+              opacity: 0.15,
               layer: 'below' as const,
               line: { width: 0 },
             })),
-            // Vertical grid lines for each hour
-            ...[7, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 19].map(hour => ({
+            // Cycle rectangles (horizontal bars)
+            ...(plotData.cycleRects || []).map(rect => ({
+              type: 'rect' as const,
+              xref: 'x' as const,
+              yref: 'y' as const,
+              x0: rect.x0,
+              x1: rect.x1,
+              y0: rect.y0,
+              y1: rect.y1,
+              fillcolor: colorByDevice ? rect.color : '#F49E0A', // Orange for single color
+              opacity: 0.9,
+              line: {
+                color: colorByDevice ? rect.color : '#F49E0A',
+                width: 1,
+              },
+              layer: 'above' as const,
+            })),
+            // Vertical grid lines for each 2 hours (reduced)
+            ...[8, 10, 14, 16, 18].map(hour => ({
               type: 'line' as const,
               xref: 'x' as const,
               yref: 'paper' as const,
@@ -259,11 +286,11 @@ export default function RpmChart({ cycles }: RpmChartProps) {
               y0: 0,
               y1: 1,
               line: {
-                color: '#475569', // Body Text
+                color: '#64748B', // Secondary Text
                 width: 1,
                 dash: 'dot' as const,
               },
-              opacity: 0.2,
+              opacity: 0.3,
               layer: 'below' as const,
             })),
             // Emphasized line for 12:00 (lunch time)
@@ -278,9 +305,9 @@ export default function RpmChart({ cycles }: RpmChartProps) {
               line: {
                 color: '#64748B', // Secondary Text
                 width: 2,
-                dash: 'dot' as const,
+                dash: 'dash' as const,
               },
-              opacity: 0.4,
+              opacity: 0.5,
               layer: 'below' as const,
             },
           ],
