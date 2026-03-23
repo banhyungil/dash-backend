@@ -11,6 +11,7 @@ from config import (
 from services.csv_parser import parse_pulse_csv, parse_vib_csv
 from services.rpm_service import process_pulse_compact_to_rpm
 from services.expected_filter import is_expected_valid, calculate_expected_pulse_count
+from services import database
 from repos.cycles_repo import insert_many
 from repos.ingested_files_repo import upsert as upsert_ingested_file, exists_by_path
 
@@ -49,10 +50,17 @@ def scan_folder(folder: str) -> list[dict]:
         file_type = "PULSE" if name.startswith("PULSE_") else "VIB"
         source = str(csv_path.resolve())
 
-        # Estimate cycles by counting non-empty lines
+        # Estimate cycles by counting newlines (fast, no full read for large files)
         try:
-            with open(csv_path, "r", encoding="utf-8") as f:
-                estimated = sum(1 for line in f if line.strip())
+            size = csv_path.stat().st_size
+            if size > 10 * 1024 * 1024:  # >10MB: sample first 1MB to estimate
+                with open(csv_path, "rb") as f:
+                    chunk = f.read(1024 * 1024)
+                    lines_in_chunk = chunk.count(b'\n')
+                    estimated = int(lines_in_chunk * (size / len(chunk)))
+            else:
+                with open(csv_path, "rb") as f:
+                    estimated = sum(1 for _ in f)
         except Exception:
             estimated = 0
 
@@ -70,7 +78,8 @@ def scan_folder(folder: str) -> list[dict]:
 
 def ingest_pulse_file(file_path: str, device: str | None = None,
                       shaft_dia: float = DEFAULT_SHAFT_DIA,
-                      pattern_width: float = DEFAULT_PATTERN_WIDTH) -> dict:
+                      pattern_width: float = DEFAULT_PATTERN_WIDTH,
+                      conn=None) -> dict:
     """Ingest a single PULSE CSV file into DB.
     Returns {filename, cycles_ingested, cycles_skipped, errors}.
     """
@@ -158,8 +167,8 @@ def ingest_pulse_file(file_path: str, device: str | None = None,
             errors.append(f"Cycle {i}: {e}")
             skipped += 1
 
-    inserted = insert_many(db_rows)
-    upsert_ingested_file(source, filename, "PULSE", inserted, skipped, len(errors))
+    inserted = insert_many(db_rows, conn=conn)
+    upsert_ingested_file(source, filename, "PULSE", inserted, skipped, len(errors), conn=conn)
 
     logger.info("Ingested %s: %d cycles, %d skipped, %d errors", filename, inserted, skipped, len(errors))
 
@@ -171,7 +180,7 @@ def ingest_pulse_file(file_path: str, device: str | None = None,
     }
 
 
-def ingest_vib_file(file_path: str, device: str | None = None) -> dict:
+def ingest_vib_file(file_path: str, device: str | None = None, conn=None) -> dict:
     """Ingest a VIB CSV file — records the file as ingested but doesn't store
     per-sample data in DB (too large). VIB array data is read from CSV on demand."""
     path = Path(file_path)
@@ -181,7 +190,7 @@ def ingest_vib_file(file_path: str, device: str | None = None) -> dict:
     raw_cycles = parse_vib_csv(path)
     cycle_count = len(raw_cycles)
 
-    upsert_ingested_file(source, filename, "VIB", cycle_count, 0, 0)
+    upsert_ingested_file(source, filename, "VIB", cycle_count, 0, 0, conn=conn)
     logger.info("Ingested VIB %s: %d cycles (metadata only)", filename, cycle_count)
 
     return {
@@ -192,33 +201,39 @@ def ingest_vib_file(file_path: str, device: str | None = None) -> dict:
     }
 
 
-def ingest_file(file_path: str, **kwargs) -> dict:
+def ingest_file(file_path: str, conn=None, **kwargs) -> dict:
     """Ingest a single CSV file (auto-detect PULSE or VIB)."""
     name = Path(file_path).name.upper()
     if name.startswith("PULSE_"):
-        return ingest_pulse_file(file_path, **kwargs)
+        return ingest_pulse_file(file_path, conn=conn, **kwargs)
     elif name.startswith("VIB_"):
-        return ingest_vib_file(file_path)
+        return ingest_vib_file(file_path, conn=conn)
     else:
         return {"filename": Path(file_path).name, "cycles_ingested": 0,
                 "cycles_skipped": 0, "errors": [f"Unknown file type: {name}"]}
 
 
 def ingest_files(paths: list[str]) -> dict:
-    """Ingest multiple CSV files. Returns aggregated result."""
+    """Ingest multiple CSV files in a single transaction (batch commit)."""
+    conn = database.get_connection()
     total_files = 0
     success_cycles = 0
     skipped_cycles = 0
     failed_lines = 0
     details = []
 
-    for p in paths:
-        result = ingest_file(p)
-        details.append(result)
-        total_files += 1
-        success_cycles += result["cycles_ingested"]
-        skipped_cycles += result["cycles_skipped"]
-        failed_lines += len(result["errors"])
+    try:
+        for p in paths:
+            result = ingest_file(p, conn=conn)
+            details.append(result)
+            total_files += 1
+            success_cycles += result["cycles_ingested"]
+            skipped_cycles += result["cycles_skipped"]
+            failed_lines += len(result["errors"])
+
+        conn.commit()
+    finally:
+        conn.close()
 
     return {
         "total_files": total_files,

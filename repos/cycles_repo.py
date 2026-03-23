@@ -2,34 +2,41 @@
 from services import database
 
 
-def insert_many(cycles: list[dict]) -> int:
-    """Bulk insert cycles. Returns number of inserted rows."""
+_INSERT_SQL = """
+    INSERT OR REPLACE INTO t_cycle (
+        timestamp, date, month, device, session, cycle_index,
+        rpm_mean, rpm_min, rpm_max,
+        mpm_mean, mpm_min, mpm_max,
+        duration_ms, set_count, expected_count, is_valid,
+        max_vib_x, max_vib_z, high_vib_event,
+        source_path
+    ) VALUES (
+        :timestamp, :date, :month, :device, :session, :cycle_index,
+        :rpm_mean, :rpm_min, :rpm_max,
+        :mpm_mean, :mpm_min, :mpm_max,
+        :duration_ms, :set_count, :expected_count, :is_valid,
+        :max_vib_x, :max_vib_z, :high_vib_event,
+        :source_path
+    )
+"""
+
+
+def insert_many(cycles: list[dict], conn=None) -> int:
+    """Bulk insert cycles. If conn is provided, does NOT commit (caller manages tx)."""
     if not cycles:
         return 0
 
-    conn = database.get_connection()
+    own_conn = conn is None
+    if own_conn:
+        conn = database.get_connection()
     try:
-        cursor = conn.executemany("""
-            INSERT OR REPLACE INTO t_cycle (
-                timestamp, date, month, device, session, cycle_index,
-                rpm_mean, rpm_min, rpm_max,
-                mpm_mean, mpm_min, mpm_max,
-                duration_ms, set_count, expected_count, is_valid,
-                max_vib_x, max_vib_z, high_vib_event,
-                source_path
-            ) VALUES (
-                :timestamp, :date, :month, :device, :session, :cycle_index,
-                :rpm_mean, :rpm_min, :rpm_max,
-                :mpm_mean, :mpm_min, :mpm_max,
-                :duration_ms, :set_count, :expected_count, :is_valid,
-                :max_vib_x, :max_vib_z, :high_vib_event,
-                :source_path
-            )
-        """, cycles)
-        conn.commit()
+        cursor = conn.executemany(_INSERT_SQL, cycles)
+        if own_conn:
+            conn.commit()
         return cursor.rowcount
     finally:
-        conn.close()
+        if own_conn:
+            conn.close()
 
 
 def get_monthly_summary() -> dict:
