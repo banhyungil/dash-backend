@@ -52,25 +52,25 @@ def _load_settings(device: str, shaft_dia: float = None, pattern_width: float = 
 
 
 @router.get("/months")
-def api_months():
+def get_months():
     """Get available months."""
     return get_available_months()
 
 
 @router.get("/devices")
-def api_devices(month: str = Query(...)):
+def get_devices(month: str = Query(...)):
     """Get devices for a month."""
     return get_devices_for_month(month)
 
 
 @router.get("/dates")
-def api_dates(month: str = Query(...), device: str = Query(...)):
+def get_dates(month: str = Query(...), device: str = Query(...)):
     """Get dates for a month and device."""
     return get_dates_for_month_device(month, device)
 
 
 @router.get("/cycles/daily")
-def api_daily_data(
+def get_daily_data(
     month: str = Query(...),
     date: str = Query(...),
     shaft_dia: float = Query(None),
@@ -253,7 +253,7 @@ def api_daily_data(
 
 
 @router.get("/cycles/export")
-def api_test_export(
+def export(
     month: str = Query(...),
     date: str = Query(...),
     shaft_dia: float = Query(None),

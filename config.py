@@ -30,7 +30,7 @@ ALLOW_RPM_ERROR_PER_SET = {
 EXPECTED_TOLERANCE = 0.1
 
 # Cache version
-CACHE_VERSION = 2  # Bumped: parser now strips unix timestamp from new CSV format
+CACHE_VERSION = 3  # Bumped: parser switched from ast.literal_eval to json.loads
 
 # SQLite database
 DB_PATH = Path(os.environ.get("DB_PATH", backend_dir / "dash.db"))

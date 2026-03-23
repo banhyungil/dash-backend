@@ -1,4 +1,4 @@
-"""API endpoints for CSV ingestion and data management."""
+"""CSV 적재 및 데이터 관리 API."""
 import logging
 import tempfile
 import shutil
@@ -7,7 +7,7 @@ from pathlib import Path
 from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 
-from services.ingest_service import scan_folder, ingest_file
+from services.ingest_service import scan_folder, ingest_files
 from repos.cycles_repo import get_monthly_summary
 
 logger = logging.getLogger(__name__)
@@ -15,46 +15,28 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
 
 # ---------------------------------------------------------------------------
-# In-memory job tracker
+# 잡 상태 관리 (인메모리)
 # ---------------------------------------------------------------------------
 _jobs: dict[str, dict] = {}
 
 
 def _run_ingest_job(job_id: str, paths: list[str]):
-    """Background task: ingest files and update job status."""
+    """백그라운드 적재: 서비스에 콜백 전달하여 프로그레스 업데이트."""
     job = _jobs[job_id]
     job["status"] = "running"
-    job["total_files"] = len(paths)
 
-    total_files = 0
-    success_cycles = 0
-    skipped_cycles = 0
-    failed_lines = 0
-    details = []
+    def on_progress(completed: int, total: int):
+        job["completed_files"] = completed
 
-    for i, p in enumerate(paths):
-        result = ingest_file(p)
-        details.append(result)
-        total_files += 1
-        success_cycles += result["cycles_ingested"]
-        skipped_cycles += result["cycles_skipped"]
-        failed_lines += len(result["errors"])
-
-        job["completed_files"] = i + 1
-        job["success_cycles"] = success_cycles
+    result = ingest_files(paths, on_progress=on_progress)
 
     job["status"] = "done"
-    job["result"] = {
-        "total_files": total_files,
-        "success_cycles": success_cycles,
-        "skipped_cycles": skipped_cycles,
-        "failed_lines": failed_lines,
-        "details": details,
-    }
+    job["success_cycles"] = result["success_cycles"]
+    job["result"] = result
 
 
 # ---------------------------------------------------------------------------
-# Request models
+# 요청 모델
 # ---------------------------------------------------------------------------
 
 class ScanRequest(BaseModel):
@@ -66,12 +48,12 @@ class IngestRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Endpoints
+# 엔드포인트
 # ---------------------------------------------------------------------------
 
 @router.post("/ingest/scan")
-def api_scan(req: ScanRequest):
-    """Scan a local folder for PULSE/VIB CSV files."""
+def scan(req: ScanRequest):
+    """로컬 폴더에서 PULSE/VIB CSV 파일 스캔."""
     folder = req.folder.strip()
     if not Path(folder).exists():
         raise HTTPException(404, f"Folder not found: {folder}")
@@ -81,8 +63,8 @@ def api_scan(req: ScanRequest):
 
 
 @router.post("/ingest")
-def api_ingest(req: IngestRequest, background_tasks: BackgroundTasks):
-    """Start async ingestion of CSV files. Returns job_id for progress tracking."""
+def ingest(req: IngestRequest, background_tasks: BackgroundTasks):
+    """CSV 파일 비동기 적재. job_id를 반환하여 진행 상태 추적 가능."""
     if not req.paths:
         raise HTTPException(400, "No paths provided")
 
@@ -105,8 +87,8 @@ def api_ingest(req: IngestRequest, background_tasks: BackgroundTasks):
 
 
 @router.get("/ingest/job/{job_id}")
-def api_job_status(job_id: str):
-    """Get ingestion job progress."""
+def get_job_status(job_id: str):
+    """적재 잡 진행 상태 조회."""
     job = _jobs.get(job_id)
     if not job:
         raise HTTPException(404, f"Job not found: {job_id}")
@@ -114,8 +96,8 @@ def api_job_status(job_id: str):
 
 
 @router.post("/ingest/upload")
-async def api_upload(files: list[UploadFile] = File(...), background_tasks: BackgroundTasks = None):
-    """Upload and ingest CSV files."""
+async def upload(files: list[UploadFile] = File(...), background_tasks: BackgroundTasks = None):
+    """CSV 파일 업로드 후 비동기 적재."""
     if not files:
         raise HTTPException(400, "No files provided")
 
@@ -138,7 +120,6 @@ async def api_upload(files: list[UploadFile] = File(...), background_tasks: Back
         "completed_files": 0,
         "success_cycles": 0,
         "result": None,
-        "_tmp_dir": str(tmp_dir),
     }
 
     def _run_upload_job():
@@ -153,6 +134,6 @@ async def api_upload(files: list[UploadFile] = File(...), background_tasks: Back
 
 
 @router.get("/ingest/status")
-def api_ingest_status():
-    """Get ingestion status summary."""
+def get_status():
+    """적재 현황 요약 조회."""
     return get_monthly_summary()
