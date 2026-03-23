@@ -2,8 +2,11 @@
 import sys
 import json
 import math
+import logging
 from pathlib import Path
 from fastapi import APIRouter, Query, HTTPException
+
+logger = logging.getLogger(__name__)
 
 # Import all services from day_viewer (all copied from viewer)
 from config import DEFAULT_SHAFT_DIA, DEFAULT_PATTERN_WIDTH, DEFAULT_TARGET_RPM, DATA_DIR, DEVICE_SESSION_MAP, ROLL_DIAMETER_MM
@@ -94,6 +97,8 @@ def api_daily_data(
     # Collect data from all devices
     all_pulse_cycles = []
     all_vib_data = []
+    skipped_rpm_none = 0
+    skipped_expected = 0
 
     for device in devices:
         # Load device-specific settings
@@ -128,13 +133,15 @@ def api_daily_data(
                 )
 
                 if rpm_result is None:
+                    skipped_rpm_none += 1
                     continue
 
                 rpm_mean = rpm_result["rpmMean"]
 
                 # Check expected validation (10% tolerance) using device-specific pattern_width
                 if not is_expected_valid(set_count, rpm_mean, device_s_dia, device_p_wid):
-                    continue  # Skip cycles that don't pass expected check
+                    skipped_expected += 1
+                    continue
 
                 # Add to results
                 expected_count = calculate_expected_pulse_count(rpm_mean, device_s_dia, device_p_wid)
@@ -191,6 +198,13 @@ def api_daily_data(
                     "vib_accel_x": cycle["accel_x"],
                     "vib_accel_z": cycle["accel_z"],
                 })
+
+    logger.info(
+        "Date %s: %d cycles OK, skipped %d (rpm_none=%d, expected=%d)",
+        date, len(all_pulse_cycles),
+        skipped_rpm_none + skipped_expected,
+        skipped_rpm_none, skipped_expected,
+    )
 
     # Merge all cycles by timestamp (preserve individual session names)
     # Don't pass "session": "all" - let each cycle keep its own session name (R1~R4)

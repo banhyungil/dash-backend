@@ -30,7 +30,10 @@ ALLOW_RPM_ERROR_PER_SET = {
 EXPECTED_TOLERANCE = 0.1
 
 # Cache version
-CACHE_VERSION = 1  # Bump to invalidate all caches
+CACHE_VERSION = 2  # Bumped: parser now strips unix timestamp from new CSV format
+
+# SQLite database
+DB_PATH = Path(os.environ.get("DB_PATH", backend_dir / "dash.db"))
 
 # Settings file for device parameters
 SETTINGS_FILE = Path(os.environ.get("SETTINGS_FILE", backend_dir / "device_settings.json"))
