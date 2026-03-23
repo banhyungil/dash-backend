@@ -126,6 +126,50 @@ MPM = RPM × π × roll_diameter / 1000
 
 ---
 
+## 데이터 저장 구조
+
+DB와 CSV 파일이 역할을 분리하여 데이터를 관리한다.
+
+### DB 저장 (t_cycle 테이블) — 집계값만
+
+| 구분 | 컬럼 | 설명 |
+|------|------|------|
+| RPM/MPM | rpm_mean, rpm_min, rpm_max, mpm_mean, mpm_min, mpm_max | 사이클별 통계 |
+| 진동 | max_vib_x, max_vib_z | X/Z축 가속도 최대 절대값 |
+| 진동 | high_vib_event | 0.3g 초과 여부 (0 또는 1) |
+| 메타 | duration_ms, set_count, expected_count, is_valid | 사이클 유효성 |
+| 추적 | source_path | 원본 CSV 파일 경로 |
+
+- 전체 배열 데이터(수천 포인트)는 DB에 저장하지 않음
+- 목록 조회, KPI 통계 등에 사용
+
+### CSV 파일 — raw 배열 데이터
+
+| 파일 | 배열 데이터 | 용도 |
+|------|------------|------|
+| PULSE_*.csv | pulse_timeline, accel_x/y/z, rpm_data | RPM 차트, 펄스 가속도 차트 |
+| VIB_*.csv | accel_x, accel_z (사이클당 ~5000개) | Vibration 파형 차트 |
+
+- API 조회 시 `source_path` 기반으로 원본 CSV에서 on-demand 로드
+- **CSV 원본 파일이 없으면 차트 배열 데이터를 볼 수 없음**
+
+### 조회 흐름
+
+```
+프론트 → GET /cycles/daily?month=2603&date=260301
+  ↓
+DB에서 사이클 목록 + 집계값 조회
+  ↓
+각 사이클의 source_path로 원본 CSV 참조
+  ↓
+PULSE CSV → rpm_timeline, rpm_data, pulse_accel_x/y/z
+VIB CSV   → vib_accel_x, vib_accel_z
+  ↓
+집계값 + raw 배열을 합쳐서 DailyDataResponse로 응답
+```
+
+---
+
 ## 데이터 흐름 요약
 
 ```

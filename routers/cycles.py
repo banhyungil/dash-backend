@@ -43,6 +43,8 @@ def get_dates(month: str = Query(...)):
         {
             "date": r["date"],
             "label": f"{r['date'][:2]}/{r['date'][2:4]}/{r['date'][4:]} ({r['cycle_count']} cycles)",
+            "cycle_count": r["cycle_count"],
+            "high_vib_events": r["high_vib_events"],
         }
         for r in rows
     ]

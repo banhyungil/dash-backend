@@ -63,7 +63,8 @@ def get_dates(month: str) -> list[dict]:
         rows = conn.execute("""
             SELECT date,
                    COUNT(*) AS cycle_count,
-                   SUM(CASE WHEN is_valid = 1 THEN 1 ELSE 0 END) AS valid_count
+                   SUM(CASE WHEN is_valid = 1 THEN 1 ELSE 0 END) AS valid_count,
+                   SUM(CASE WHEN high_vib_event = 1 THEN 1 ELSE 0 END) AS high_vib_events
             FROM t_cycle
             WHERE month = ?
             GROUP BY date
