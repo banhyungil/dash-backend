@@ -39,6 +39,61 @@ def insert_many(cycles: list[dict], conn=None) -> int:
             conn.close()
 
 
+def get_months() -> list[dict]:
+    """적재된 월 목록 조회."""
+    conn = database.get_connection()
+    try:
+        rows = conn.execute("""
+            SELECT DISTINCT month,
+                   COUNT(DISTINCT date) AS date_count,
+                   COUNT(*) AS cycle_count
+            FROM t_cycle
+            GROUP BY month
+            ORDER BY month
+        """).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def get_dates(month: str) -> list[dict]:
+    """특정 월의 날짜 목록 조회."""
+    conn = database.get_connection()
+    try:
+        rows = conn.execute("""
+            SELECT date,
+                   COUNT(*) AS cycle_count,
+                   SUM(CASE WHEN is_valid = 1 THEN 1 ELSE 0 END) AS valid_count
+            FROM t_cycle
+            WHERE month = ?
+            GROUP BY date
+            ORDER BY date
+        """, (month,)).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def find_by_date(month: str, date: str) -> list[dict]:
+    """특정 날짜의 사이클 집계값 조회."""
+    conn = database.get_connection()
+    try:
+        rows = conn.execute("""
+            SELECT timestamp, date, month, device, session, cycle_index,
+                   rpm_mean, rpm_min, rpm_max,
+                   mpm_mean, mpm_min, mpm_max,
+                   duration_ms, set_count, expected_count, is_valid,
+                   max_vib_x, max_vib_z, high_vib_event,
+                   source_path
+            FROM t_cycle
+            WHERE month = ? AND date = ?
+            ORDER BY timestamp
+        """, (month, date)).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
 def get_monthly_summary() -> dict:
     """Get ingestion status summary by month."""
     conn = database.get_connection()

@@ -1,437 +1,181 @@
-"""API endpoints for day viewer."""
-import sys
-import json
+"""사이클 데이터 조회 API."""
 import math
 import logging
 from pathlib import Path
-from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Query
 
-logger = logging.getLogger(__name__)
-
-# Import all services from day_viewer (all copied from viewer)
-from config import DEFAULT_SHAFT_DIA, DEFAULT_PATTERN_WIDTH, DEFAULT_TARGET_RPM, DATA_DIR, DEVICE_SESSION_MAP, ROLL_DIAMETER_MM
-from services.folder_scanner import get_available_months, get_devices_for_month, get_dates_for_month_device, get_csv_files
+from config import DEFAULT_SHAFT_DIA, DEFAULT_PATTERN_WIDTH, DEFAULT_TARGET_RPM, ROLL_DIAMETER_MM
+from repos.cycles_repo import get_months as repo_get_months, get_dates as repo_get_dates, find_by_date
 from services.cached_csv_parser import parse_pulse_cached, parse_vib_cached
 from services.rpm_service import process_pulse_compact_to_rpm
-from services.expected_filter import is_expected_valid, calculate_expected_pulse_count
-from services.session_merger import merge_sessions_by_timestamp, calculate_continuous_timeline
-from services.test_export import copy_raw_csv_files, create_integrated_csv_raw
+from services.session_merger import calculate_continuous_timeline
 
-
-def calc_mpm_from_rpm(rpm: float, roll_dia: float) -> float:
-    """RPM + roll_dia(mm) -> MPM"""
-    return round(rpm * math.pi * roll_dia / 1000, 2)
-
-# Load device settings from viewer's settings file
-current_file = Path(__file__).resolve()
-backend_dir = current_file.parent.parent
-code_dir = backend_dir.parent.parent
-_settings_file = code_dir / "viewer" / "backend" / "device_settings.json"
-
-def load_device_settings(mac: str) -> dict | None:
-    """Load device settings from viewer's JSON file."""
-    if _settings_file.exists():
-        try:
-            with open(_settings_file, "r", encoding="utf-8") as f:
-                all_settings = json.load(f)
-                return all_settings.get(mac)
-        except Exception:
-            return None
-    return None
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api")
 
 
-def _load_settings(device: str, shaft_dia: float = None, pattern_width: float = None, target_rpm: float = None):
-    """Load device settings with optional overrides."""
-    settings = load_device_settings(device)
-    s_dia = shaft_dia if shaft_dia is not None else (settings.get("shaft_dia", DEFAULT_SHAFT_DIA) if settings else DEFAULT_SHAFT_DIA)
-    p_wid = pattern_width if pattern_width is not None else (settings.get("pattern_width", DEFAULT_PATTERN_WIDTH) if settings else DEFAULT_PATTERN_WIDTH)
-    t_rpm = target_rpm if target_rpm is not None else (settings.get("target_rpm", DEFAULT_TARGET_RPM) if settings else DEFAULT_TARGET_RPM)
-    return s_dia, p_wid, t_rpm
+def _calc_mpm(rpm: float, roll_dia: float) -> float:
+    return round(rpm * math.pi * roll_dia / 1000, 2)
 
+
+# ---------------------------------------------------------------------------
+# 목록 조회 (DB 기반)
+# ---------------------------------------------------------------------------
 
 @router.get("/months")
 def get_months():
-    """Get available months."""
-    return get_available_months()
-
-
-@router.get("/devices")
-def get_devices(month: str = Query(...)):
-    """Get devices for a month."""
-    return get_devices_for_month(month)
+    """적재된 월 목록 조회."""
+    rows = repo_get_months()
+    # 프론트 호환 형식: [{month, label}, ...]
+    return [
+        {"month": r["month"], "label": f"20{r['month'][:2]}년 {r['month'][2:]}월"}
+        for r in rows
+    ]
 
 
 @router.get("/dates")
-def get_dates(month: str = Query(...), device: str = Query(...)):
-    """Get dates for a month and device."""
-    return get_dates_for_month_device(month, device)
+def get_dates(month: str = Query(...)):
+    """특정 월의 날짜 목록 조회."""
+    rows = repo_get_dates(month)
+    # 프론트 호환 형식: [{date, label}, ...]
+    return [
+        {
+            "date": r["date"],
+            "label": f"{r['date'][:2]}/{r['date'][2:4]}/{r['date'][4:]} ({r['cycle_count']} cycles)",
+        }
+        for r in rows
+    ]
 
+
+# ---------------------------------------------------------------------------
+# 일별 데이터 조회 (DB 집계값 + CSV 배열 데이터)
+# ---------------------------------------------------------------------------
 
 @router.get("/cycles/daily")
 def get_daily_data(
     month: str = Query(...),
     date: str = Query(...),
-    shaft_dia: float = Query(None),
-    pattern_width: float = Query(None),
-    target_rpm: float = Query(None),
 ):
+    """일별 사이클 데이터 조회.
+
+    처리 흐름:
+      1. DB에서 해당 날짜 사이클 집계값 조회
+      2. source_path로 CSV에서 배열 데이터(RPM 타임라인, 가속도 등) 로드
+      3. VIB 데이터 매칭
+      4. 타임라인 오프셋 계산
     """
-    Get daily data for a specific date, merging all devices and sessions by timestamp.
-    Only includes cycles where expected validation passes (10% tolerance).
+    # 1단계: DB에서 집계값 조회
+    db_cycles = find_by_date(month, date)
+    if not db_cycles:
+        return {"date": date, "device": "all", "settings": {}, "cycles": [], "total_cycles": 0}
 
-    Returns:
-        - rpm_data: List of cycles with RPM timeline data
-        - vib_data: List of cycles with Pulse + VIB accelerometer data
-    """
-    # Get all devices for this month
-    devices = get_devices_for_month(month)
+    # 유효 사이클만 필터링
+    valid_cycles = [c for c in db_cycles if c["is_valid"]]
 
-    # Use first device's settings as default for shaft_dia and target_rpm
-    first_device = devices[0] if devices else None
-    default_settings = load_device_settings(first_device) if first_device else {}
-    default_s_dia = shaft_dia if shaft_dia is not None else (default_settings.get("shaft_dia", DEFAULT_SHAFT_DIA) if default_settings else DEFAULT_SHAFT_DIA)
-    default_t_rpm = target_rpm if target_rpm is not None else (default_settings.get("target_rpm", DEFAULT_TARGET_RPM) if default_settings else DEFAULT_TARGET_RPM)
+    # 2단계: source_path로 CSV에서 배열 데이터 로드
+    result_cycles = []
+    # source_path별로 캐싱하여 같은 파일을 여러 번 파싱하지 않음
+    _parsed_cache: dict[str, dict] = {}
 
-    # Collect data from all devices
-    all_pulse_cycles = []
-    all_vib_data = []
-    skipped_rpm_none = 0
-    skipped_expected = 0
+    for cycle in valid_cycles:
+        source_path = cycle.get("source_path")
+        if not source_path or not Path(source_path).exists():
+            # source_path가 없으면 집계값만 반환 (배열 없음)
+            result_cycles.append({
+                **cycle,
+                "rpm_timeline": [], "rpm_data": [],
+                "mpm_data": [],
+                "pulse_timeline": [], "pulse_accel_x": [], "pulse_accel_y": [], "pulse_accel_z": [],
+                "vib_accel_x": [], "vib_accel_z": [],
+            })
+            continue
 
-    for device in devices:
-        # Load device-specific settings
-        device_settings = load_device_settings(device)
+        # CSV 파싱 (캐시)
+        if source_path not in _parsed_cache:
+            _parsed_cache[source_path] = parse_pulse_cached(source_path)
+        parsed = _parsed_cache[source_path]
 
-        # Get device-specific pattern_width, or use query param, or use default
-        device_s_dia = shaft_dia if shaft_dia is not None else (device_settings.get("shaft_dia", default_s_dia) if device_settings else default_s_dia)
-        device_p_wid = pattern_width if pattern_width is not None else (device_settings.get("pattern_width", DEFAULT_PATTERN_WIDTH) if device_settings else DEFAULT_PATTERN_WIDTH)
-        device_t_rpm = target_rpm if target_rpm is not None else (device_settings.get("target_rpm", default_t_rpm) if device_settings else default_t_rpm)
+        cycle_index = cycle["cycle_index"]
 
-        csv_files = get_csv_files(month, date, device)
+        # cycle_index 범위 확인
+        if cycle_index >= len(parsed["cycles"]):
+            result_cycles.append({
+                **cycle,
+                "rpm_timeline": [], "rpm_data": [],
+                "mpm_data": [],
+                "pulse_timeline": [], "pulse_accel_x": [], "pulse_accel_y": [], "pulse_accel_z": [],
+                "vib_accel_x": [], "vib_accel_z": [],
+            })
+            continue
 
-        # Process PULSE files from this device
-        for pulse_info in csv_files["pulse"]:
-            session = pulse_info["session"]
-            pulse_path = Path(pulse_info["path"])
+        raw = parsed["cycles"][cycle_index]
 
-            # Parse pulse data
-            parsed = parse_pulse_cached(pulse_path)
-
-            for i, cycle in enumerate(parsed["cycles"]):
-                set_count = len(cycle["pulses"])
-
-                # Calculate RPM using device-specific pattern_width
-                rpm_result = process_pulse_compact_to_rpm(
-                    cycle["pulses"],
-                    cycle["accel_x"],
-                    cycle["accel_y"],
-                    cycle["accel_z"],
-                    device_s_dia,
-                    device_p_wid,
-                )
-
-                if rpm_result is None:
-                    skipped_rpm_none += 1
-                    continue
-
-                rpm_mean = rpm_result["rpmMean"]
-
-                # Check expected validation (10% tolerance) using device-specific pattern_width
-                if not is_expected_valid(set_count, rpm_mean, device_s_dia, device_p_wid):
-                    skipped_expected += 1
-                    continue
-
-                # Add to results
-                expected_count = calculate_expected_pulse_count(rpm_mean, device_s_dia, device_p_wid)
-
-                # Map device to session name (R1, R2, R3, R4)
-                session_name = DEVICE_SESSION_MAP.get(device, device)
-
-                # Calculate MPM using ROLL_DIAMETER_MM (not shaft_dia)
-                mpm_mean = calc_mpm_from_rpm(rpm_mean, ROLL_DIAMETER_MM)
-                mpm_min = calc_mpm_from_rpm(rpm_result["rpmMin"], ROLL_DIAMETER_MM)
-                mpm_max = calc_mpm_from_rpm(rpm_result["rpmMax"], ROLL_DIAMETER_MM)
-                mpm_data = [calc_mpm_from_rpm(rpm, ROLL_DIAMETER_MM) for rpm in rpm_result["dataRPM"]]
-
-                all_pulse_cycles.append({
-                    "timestamp": parsed["timestamps"][i],
-                    "session": session_name,
-                    "device": device,
-                    "cycle_index": i,
-                    "date": date,
-                    "rpm_mean": round(rpm_mean, 2),
-                    "rpm_min": round(rpm_result["rpmMin"], 2),
-                    "rpm_max": round(rpm_result["rpmMax"], 2),
-                    "rpm_timeline": rpm_result["timeLine"],
-                    "rpm_data": rpm_result["dataRPM"],
-                    "mpm_mean": mpm_mean,
-                    "mpm_min": mpm_min,
-                    "mpm_max": mpm_max,
-                    "mpm_data": mpm_data,
-                    "duration_ms": round(rpm_result["durationms"], 2),
-                    "set_count": set_count,
-                    "expected_count": expected_count,
-                    # Pulse accelerometer data (for vibration tab)
-                    "pulse_timeline": rpm_result.get("rawTimeLine", []),
-                    "pulse_accel_x": rpm_result.get("rawAccelX", []),
-                    "pulse_accel_y": rpm_result.get("rawAccelY", []),
-                    "pulse_accel_z": rpm_result.get("rawAccelZ", []),
-                })
-
-        # Process VIB files from this device
-        for vib_info in csv_files["vib"]:
-            session = vib_info["session"]
-            vib_path = Path(vib_info["path"])
-
-            parsed_vib = parse_vib_cached(vib_path)
-
-            for i, cycle in enumerate(parsed_vib["cycles"]):
-                # Map device to session name (R1, R2, R3, R4)
-                session_name = DEVICE_SESSION_MAP.get(device, device)
-
-                all_vib_data.append({
-                    "device": device,
-                    "session": session_name,
-                    "cycle_index": i,
-                    "vib_accel_x": cycle["accel_x"],
-                    "vib_accel_z": cycle["accel_z"],
-                })
-
-    logger.info(
-        "Date %s: %d cycles OK, skipped %d (rpm_none=%d, expected=%d)",
-        date, len(all_pulse_cycles),
-        skipped_rpm_none + skipped_expected,
-        skipped_rpm_none, skipped_expected,
-    )
-
-    # Merge all cycles by timestamp (preserve individual session names)
-    # Don't pass "session": "all" - let each cycle keep its own session name (R1~R4)
-    merged_pulse = merge_sessions_by_timestamp([{"cycles": all_pulse_cycles}])
-    rpm_cycles = merged_pulse["cycles"]
-
-    # Calculate continuous timeline offsets
-    rpm_cycles = calculate_continuous_timeline(rpm_cycles)
-
-    # Attach VIB data to matching cycles
-    for cycle in rpm_cycles:
-        # Find matching VIB data by device, session, and cycle_index
-        matching_vib = next(
-            (v for v in all_vib_data
-             if v["device"] == cycle["device"]
-             and v["session"] == cycle["session"]
-             and v["cycle_index"] == cycle["cycle_index"]),
-            None
+        # RPM 계산 → 배열 데이터 생성
+        rpm_result = process_pulse_compact_to_rpm(
+            raw["pulses"], raw["accel_x"], raw["accel_y"], raw["accel_z"],
+            DEFAULT_SHAFT_DIA, DEFAULT_PATTERN_WIDTH,
         )
 
-        if matching_vib:
-            cycle["vib_accel_x"] = matching_vib["vib_accel_x"]
-            cycle["vib_accel_z"] = matching_vib["vib_accel_z"]
+        if rpm_result:
+            mpm_data = [_calc_mpm(rpm, ROLL_DIAMETER_MM) for rpm in rpm_result["dataRPM"]]
+            result_cycles.append({
+                **cycle,
+                "rpm_timeline": rpm_result["timeLine"],
+                "rpm_data": rpm_result["dataRPM"],
+                "mpm_data": mpm_data,
+                "pulse_timeline": rpm_result.get("rawTimeLine", []),
+                "pulse_accel_x": rpm_result.get("rawAccelX", []),
+                "pulse_accel_y": rpm_result.get("rawAccelY", []),
+                "pulse_accel_z": rpm_result.get("rawAccelZ", []),
+                "vib_accel_x": [], "vib_accel_z": [],
+            })
         else:
-            cycle["vib_accel_x"] = []
-            cycle["vib_accel_z"] = []
+            result_cycles.append({
+                **cycle,
+                "rpm_timeline": [], "rpm_data": [],
+                "mpm_data": [],
+                "pulse_timeline": [], "pulse_accel_x": [], "pulse_accel_y": [], "pulse_accel_z": [],
+                "vib_accel_x": [], "vib_accel_z": [],
+            })
 
-    # Build device settings map
-    device_settings_map = {}
-    for device in devices:
-        settings = load_device_settings(device)
-        session_name = DEVICE_SESSION_MAP.get(device, device)
-        device_settings_map[session_name] = {
-            "shaft_dia": settings.get("shaft_dia", DEFAULT_SHAFT_DIA) if settings else DEFAULT_SHAFT_DIA,
-            "pattern_width": settings.get("pattern_width", DEFAULT_PATTERN_WIDTH) if settings else DEFAULT_PATTERN_WIDTH,
-            "target_rpm": settings.get("target_rpm", DEFAULT_TARGET_RPM) if settings else DEFAULT_TARGET_RPM,
-        }
+    # 3단계: VIB 데이터 매칭
+    # source_path에서 PULSE → VIB 경로 변환하여 VIB 데이터 로드
+    _vib_cache: dict[str, dict] = {}
+    for cycle in result_cycles:
+        source_path = cycle.get("source_path", "")
+        if not source_path:
+            continue
+
+        # PULSE_YYMMDD.csv → VIB_YYMMDD.csv
+        vib_path = source_path.replace("PULSE_", "VIB_")
+        if vib_path == source_path or not Path(vib_path).exists():
+            continue
+
+        if vib_path not in _vib_cache:
+            _vib_cache[vib_path] = parse_vib_cached(vib_path)
+        parsed_vib = _vib_cache[vib_path]
+
+        cycle_index = cycle["cycle_index"]
+        if cycle_index < len(parsed_vib["cycles"]):
+            vib_cycle = parsed_vib["cycles"][cycle_index]
+            cycle["vib_accel_x"] = vib_cycle["accel_x"]
+            cycle["vib_accel_z"] = vib_cycle["accel_z"]
+
+    # 4단계: 타임라인 오프셋 계산
+    result_cycles = calculate_continuous_timeline(result_cycles)
+
+    # 설정값 (첫 번째 사이클의 디바이스 기준)
+    settings = {
+        "shaft_dia": DEFAULT_SHAFT_DIA,
+        "pattern_width": DEFAULT_PATTERN_WIDTH,
+        "target_rpm": DEFAULT_TARGET_RPM,
+    }
 
     return {
         "date": date,
-        "device": "all",  # All devices merged
-        "settings": device_settings_map,  # Device-specific settings
-        "cycles": rpm_cycles,
-        "total_cycles": len(rpm_cycles),
-    }
-
-
-@router.get("/cycles/export")
-def export(
-    month: str = Query(...),
-    date: str = Query(...),
-    shaft_dia: float = Query(None),
-    pattern_width: float = Query(None),
-    target_rpm: float = Query(None),
-):
-    """
-    Test endpoint: Copy raw CSV files and create integrated CSV from cached data.
-
-    This endpoint:
-    1. Copies raw PULSE and VIB CSV files to test folder
-    2. Loads data from cache
-    3. Creates integrated CSV files (sorted by timestamp)
-    """
-    print(f"\n=== TEST EXPORT START ===")
-    print(f"Month: {month}, Date: {date}")
-
-    # Get all devices for this month
-    print(f"[1] Getting devices for month {month}...")
-    devices = get_devices_for_month(month)
-    print(f"[1] Found {len(devices)} devices: {devices}")
-
-    if not devices:
-        print(f"[ERROR] No devices found!")
-        raise HTTPException(404, f"No devices found for month {month}")
-
-    # Use first device's settings as default
-    first_device = devices[0]
-    print(f"[2] Loading settings for first device: {first_device}")
-    s_dia, p_wid, t_rpm = _load_settings(first_device, shaft_dia, pattern_width, target_rpm)
-    print(f"[2] Settings: shaft_dia={s_dia}, pattern_width={p_wid}, target_rpm={t_rpm}")
-
-    # Create test directory
-    test_dir = Path(__file__).resolve().parent.parent.parent / "test" / f"{month}_{date}"
-    print(f"[3] Test directory: {test_dir}")
-
-    # Step 1: Copy raw CSV files
-    print(f"[4] Copying raw CSV files from {DATA_DIR}...")
-    copied_files = copy_raw_csv_files(month, date, devices, DATA_DIR, test_dir / "raw")
-    print(f"[4] Copied {len(copied_files)} files")
-
-    # Step 2: Create integrated CSV from raw data (no RPM calculation, no filtering)
-    print(f"[5] Creating integrated CSV from raw data...")
-    integrated_files = create_integrated_csv_raw(month, date, devices, test_dir / "integrated")
-    print(f"[5] Created {len(integrated_files)} integrated files")
-
-    print(f"=== TEST EXPORT COMPLETE ===\n")
-
-    return {
-        "status": "success",
-        "test_dir": str(test_dir),
-        "raw_files_copied": len(copied_files),
-        "raw_files": copied_files,
-        "integrated_files": integrated_files,
-        "total_cycles": "raw data (no filtering)",
-    }
-
-
-# OLD CODE BELOW - keeping for reference but not used
-def _old_test_export_with_rpm_filtering():
-    # Step 2: Load data from cache (same logic as daily-data endpoint)
-    print(f"[5] Loading data from cache...")
-    all_pulse_cycles = []
-    all_vib_data = []
-
-    for device in devices:
-        print(f"[5] Processing device: {device}")
-        csv_files = get_csv_files(month, date, device)
-        print(f"[5]   Found {len(csv_files['pulse'])} PULSE files, {len(csv_files['vib'])} VIB files")
-
-        # Process PULSE files from this device
-        for pulse_info in csv_files["pulse"]:
-            session = pulse_info["session"]
-            pulse_path = Path(pulse_info["path"])
-
-            # Parse pulse data
-            parsed = parse_pulse_cached(pulse_path)
-
-            for i, cycle in enumerate(parsed["cycles"]):
-                set_count = len(cycle["pulses"])
-
-                # Calculate RPM
-                rpm_result = process_pulse_compact_to_rpm(
-                    cycle["pulses"],
-                    cycle["accel_x"],
-                    cycle["accel_y"],
-                    cycle["accel_z"],
-                    s_dia,
-                    p_wid,
-                )
-
-                if rpm_result is None:
-                    continue
-
-                rpm_mean = rpm_result["rpmMean"]
-
-                # Check expected validation (10% tolerance)
-                if not is_expected_valid(set_count, rpm_mean, s_dia, p_wid):
-                    continue  # Skip cycles that don't pass expected check
-
-                # Add to results
-                expected_count = calculate_expected_pulse_count(rpm_mean, s_dia, p_wid)
-
-                # Map device to session name (R1, R2, R3, R4)
-                session_name = DEVICE_SESSION_MAP.get(device, device)
-
-                all_pulse_cycles.append({
-                    "timestamp": parsed["timestamps"][i],
-                    "session": session_name,
-                    "device": device,
-                    "cycle_index": i,
-                    "date": date,
-                    "rpm_mean": round(rpm_mean, 2),
-                    "rpm_min": round(rpm_result["rpmMin"], 2),
-                    "rpm_max": round(rpm_result["rpmMax"], 2),
-                    "rpm_timeline": rpm_result["timeLine"],
-                    "rpm_data": rpm_result["dataRPM"],
-                    "duration_ms": round(rpm_result["durationms"], 2),
-                    "set_count": set_count,
-                    "expected_count": expected_count,
-                    # Pulse accelerometer data (for vibration tab)
-                    "pulse_timeline": rpm_result.get("rawTimeLine", []),
-                    "pulse_accel_x": rpm_result.get("rawAccelX", []),
-                    "pulse_accel_y": rpm_result.get("rawAccelY", []),
-                    "pulse_accel_z": rpm_result.get("rawAccelZ", []),
-                })
-
-        # Process VIB files from this device
-        for vib_info in csv_files["vib"]:
-            session = vib_info["session"]
-            vib_path = Path(vib_info["path"])
-
-            parsed_vib = parse_vib_cached(vib_path)
-
-            for i, cycle in enumerate(parsed_vib["cycles"]):
-                # Map device to session name (R1, R2, R3, R4)
-                session_name = DEVICE_SESSION_MAP.get(device, device)
-
-                all_vib_data.append({
-                    "device": device,
-                    "session": session_name,
-                    "cycle_index": i,
-                    "vib_accel_x": cycle["accel_x"],
-                    "vib_accel_z": cycle["accel_z"],
-                })
-
-    # Attach VIB data to matching cycles
-    for cycle in all_pulse_cycles:
-        # Find matching VIB data by device, session, and cycle_index
-        matching_vib = next(
-            (v for v in all_vib_data
-             if v["device"] == cycle["device"]
-             and v["session"] == cycle["session"]
-             and v["cycle_index"] == cycle["cycle_index"]),
-            None
-        )
-
-        if matching_vib:
-            cycle["vib_accel_x"] = matching_vib["vib_accel_x"]
-            cycle["vib_accel_z"] = matching_vib["vib_accel_z"]
-        else:
-            cycle["vib_accel_x"] = []
-            cycle["vib_accel_z"] = []
-
-    # Step 3: Create integrated CSV files
-    print(f"[6] Creating integrated CSV files...")
-    print(f"[6] Total cycles to export: {len(all_pulse_cycles)}")
-    integrated_files = create_integrated_csv(all_pulse_cycles, test_dir / "integrated", date, include_vib=True)
-    print(f"[6] Created {len(integrated_files)} integrated files")
-
-    print(f"=== TEST EXPORT COMPLETE ===\n")
-
-    return {
-        "status": "success",
-        "test_dir": str(test_dir),
-        "raw_files_copied": len(copied_files),
-        "raw_files": copied_files,
-        "integrated_files": integrated_files,
-        "total_cycles": len(all_pulse_cycles),
-        "filtered_cycles": len(all_pulse_cycles),  # Already filtered by expected
+        "device": "all",
+        "settings": settings,
+        "cycles": result_cycles,
+        "total_cycles": len(result_cycles),
     }
