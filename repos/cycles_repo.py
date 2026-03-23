@@ -1,8 +1,8 @@
-"""Repository for cycles table CRUD and queries."""
+"""Repository for t_cycle table CRUD and queries."""
 from services import database
 
 
-def insert_cycles(cycles: list[dict]) -> int:
+def insert_many(cycles: list[dict]) -> int:
     """Bulk insert cycles. Returns number of inserted rows."""
     if not cycles:
         return 0
@@ -10,7 +10,7 @@ def insert_cycles(cycles: list[dict]) -> int:
     conn = database.get_connection()
     try:
         cursor = conn.executemany("""
-            INSERT OR REPLACE INTO cycles (
+            INSERT OR REPLACE INTO t_cycle (
                 timestamp, date, month, device, session, cycle_index,
                 rpm_mean, rpm_min, rpm_max,
                 mpm_mean, mpm_min, mpm_max,
@@ -32,7 +32,7 @@ def insert_cycles(cycles: list[dict]) -> int:
         conn.close()
 
 
-def get_ingest_status() -> dict:
+def get_monthly_summary() -> dict:
     """Get ingestion status summary by month."""
     conn = database.get_connection()
     try:
@@ -43,7 +43,7 @@ def get_ingest_status() -> dict:
                 COUNT(*) AS total_cycles,
                 SUM(CASE WHEN is_valid = 1 THEN 1 ELSE 0 END) AS valid_cycles,
                 SUM(CASE WHEN high_vib_event = 1 THEN 1 ELSE 0 END) AS high_vib_events
-            FROM cycles
+            FROM t_cycle
             GROUP BY month
             ORDER BY month
         """).fetchall()

@@ -11,8 +11,8 @@ from config import (
 from services.csv_parser import parse_pulse_csv, parse_vib_csv
 from services.rpm_service import process_pulse_compact_to_rpm
 from services.expected_filter import is_expected_valid, calculate_expected_pulse_count
-from repos.cycle_repo import insert_cycles
-from repos.file_repo import record_ingested_file, is_file_ingested
+from repos.cycles_repo import insert_many
+from repos.ingested_files_repo import upsert as upsert_ingested_file, exists_by_path
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +62,7 @@ def scan_folder(folder: str) -> list[dict]:
             "type": file_type,
             "size_bytes": csv_path.stat().st_size,
             "estimated_cycles": estimated,
-            "already_ingested": is_file_ingested(source),
+            "already_ingested": exists_by_path(source),
         })
 
     return results
@@ -158,8 +158,8 @@ def ingest_pulse_file(file_path: str, device: str | None = None,
             errors.append(f"Cycle {i}: {e}")
             skipped += 1
 
-    inserted = insert_cycles(db_rows)
-    record_ingested_file(source, filename, "PULSE", inserted, skipped, len(errors))
+    inserted = insert_many(db_rows)
+    upsert_ingested_file(source, filename, "PULSE", inserted, skipped, len(errors))
 
     logger.info("Ingested %s: %d cycles, %d skipped, %d errors", filename, inserted, skipped, len(errors))
 
@@ -181,7 +181,7 @@ def ingest_vib_file(file_path: str, device: str | None = None) -> dict:
     raw_cycles = parse_vib_csv(path)
     cycle_count = len(raw_cycles)
 
-    record_ingested_file(source, filename, "VIB", cycle_count, 0, 0)
+    upsert_ingested_file(source, filename, "VIB", cycle_count, 0, 0)
     logger.info("Ingested VIB %s: %d cycles (metadata only)", filename, cycle_count)
 
     return {
@@ -204,7 +204,7 @@ def ingest_file(file_path: str, **kwargs) -> dict:
                 "cycles_skipped": 0, "errors": [f"Unknown file type: {name}"]}
 
 
-def ingest_paths(paths: list[str]) -> dict:
+def ingest_files(paths: list[str]) -> dict:
     """Ingest multiple CSV files. Returns aggregated result."""
     total_files = 0
     success_cycles = 0

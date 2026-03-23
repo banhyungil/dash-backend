@@ -17,7 +17,7 @@ def get_connection() -> sqlite3.Connection:
 
 
 SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS cycles (
+CREATE TABLE IF NOT EXISTS t_cycle (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     timestamp       TEXT NOT NULL,
     date            TEXT NOT NULL,
@@ -51,13 +51,13 @@ CREATE TABLE IF NOT EXISTS cycles (
     UNIQUE(device, date, cycle_index)
 );
 
-CREATE INDEX IF NOT EXISTS idx_cycles_date ON cycles(date);
-CREATE INDEX IF NOT EXISTS idx_cycles_month ON cycles(month);
-CREATE INDEX IF NOT EXISTS idx_cycles_session ON cycles(session);
-CREATE INDEX IF NOT EXISTS idx_cycles_timestamp ON cycles(timestamp);
-CREATE INDEX IF NOT EXISTS idx_cycles_source ON cycles(source_path);
+CREATE INDEX IF NOT EXISTS idx_t_cycle_date ON t_cycle(date);
+CREATE INDEX IF NOT EXISTS idx_t_cycle_month ON t_cycle(month);
+CREATE INDEX IF NOT EXISTS idx_t_cycle_session ON t_cycle(session);
+CREATE INDEX IF NOT EXISTS idx_t_cycle_timestamp ON t_cycle(timestamp);
+CREATE INDEX IF NOT EXISTS idx_t_cycle_source ON t_cycle(source_path);
 
-CREATE TABLE IF NOT EXISTS ingested_files (
+CREATE TABLE IF NOT EXISTS h_ingested_file (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     source_path TEXT NOT NULL UNIQUE,
     filename    TEXT NOT NULL,

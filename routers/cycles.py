@@ -69,7 +69,7 @@ def api_dates(month: str = Query(...), device: str = Query(...)):
     return get_dates_for_month_device(month, device)
 
 
-@router.get("/daily-data")
+@router.get("/cycles/daily")
 def api_daily_data(
     month: str = Query(...),
     date: str = Query(...),
@@ -252,7 +252,7 @@ def api_daily_data(
     }
 
 
-@router.get("/test-export")
+@router.get("/cycles/export")
 def api_test_export(
     month: str = Query(...),
     date: str = Query(...),

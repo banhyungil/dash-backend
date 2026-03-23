@@ -6,8 +6,8 @@ from pathlib import Path
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from pydantic import BaseModel
 
-from services.csv_ingester import scan_folder, ingest_paths
-from repos.cycle_repo import get_ingest_status
+from services.ingest_service import scan_folder, ingest_files
+from repos.cycles_repo import get_monthly_summary
 
 logger = logging.getLogger(__name__)
 
@@ -47,22 +47,20 @@ def api_ingest(req: IngestRequest):
     if not req.paths:
         raise HTTPException(400, "No paths provided")
 
-    # Validate paths exist
     for p in req.paths:
         if not Path(p).exists():
             raise HTTPException(404, f"File not found: {p}")
 
-    result = ingest_paths(req.paths)
+    result = ingest_files(req.paths)
     return result
 
 
-@router.post("/upload")
+@router.post("/ingest/upload")
 async def api_upload(files: list[UploadFile] = File(...)):
     """Upload and ingest CSV files."""
     if not files:
         raise HTTPException(400, "No files provided")
 
-    # Save uploaded files to temp dir, then ingest
     tmp_dir = Path(tempfile.mkdtemp(prefix="dash_upload_"))
     saved_paths = []
 
@@ -76,14 +74,13 @@ async def api_upload(files: list[UploadFile] = File(...)):
                 f.write(content)
             saved_paths.append(str(dest))
 
-        result = ingest_paths(saved_paths)
+        result = ingest_files(saved_paths)
         return result
     finally:
-        # Clean up temp files
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 @router.get("/ingest/status")
 def api_ingest_status():
     """Get ingestion status summary."""
-    return get_ingest_status()
+    return get_monthly_summary()

@@ -2,8 +2,8 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from routers.data_router import router as data_router
-from routers.ingest_router import router as ingest_router
+from routers.cycles import router as cycles_router
+from routers.ingest import router as ingest_router
 from services.database import init_db
 
 
@@ -25,7 +25,7 @@ app.add_middleware(
 )
 
 # Include routers
-app.include_router(data_router)
+app.include_router(cycles_router)
 app.include_router(ingest_router)
 
 
