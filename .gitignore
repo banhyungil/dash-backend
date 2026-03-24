@@ -19,7 +19,7 @@ env/
 .env.*
 
 # IDE
-.vscode/
+# .vscode/
 .idea/
 
 # OS
@@ -30,4 +30,4 @@ Thumbs.db
 data/
 data.zip
 
-dash.db
+dash.*

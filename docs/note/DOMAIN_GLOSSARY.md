@@ -184,3 +184,32 @@ SQLite DB (집계값: rpm_mean, mpm_mean, duration, 진동 이벤트)
 통계 조회 (가동시간, 이벤트 횟수 등)
 차트 렌더링 (RPM 타임라인, VIB 파형 — 원본 CSV에서 직접 읽기)
 ```
+
+### 분포 통계
+
+| 항목 | 계산 | 설명 |
+| --- | --- | --- |
+| **rms** | √(평균(x²)) | 전체 에너지 크기 (진동 강도 대표값) |
+| **peak** | max(|x|) | 절대 최대값 |
+| **min** | min(x) | 최소값 (방향 포함) |
+| **max** | max(x) | 최대값 (방향 포함) |
+| **q1** | 25th percentile of |x| | 하위 25% 경계 |
+| **median** | 50th percentile of |x| | 중앙값 |
+| **q3** | 75th percentile of |x| | 상위 25% 경계 |
+
+### Threshold 초과 분석 (기본 0.1g)
+
+| 항목 | 계산 | 설명 |
+| --- | --- | --- |
+| **exceed_count** | |x| > 0.1g인 샘플 수 | 고진동 발생 횟수 |
+| **exceed_ratio** | exceed_count / 전체 샘플 수 | 고진동 비율 (0~1) |
+| **exceed_duration_ms** | exceed_count / 1000Hz × 1000 | 고진동 총 시간 (ms) |
+
+### 이벤트 분류 (Burst vs Peak Impact)
+
+threshold 초과 **연속 구간**을 찾아서:
+
+| 항목 | 기준 | 의미 |
+| --- | --- | --- |
+| **burst_count** | 연속 ≥ 500ms | 지속 진동 (설비 이상 의심) |
+| **peak_impact_count** | 연속 < 500ms | 순간 충격 (충돌, 이물질 등) |
