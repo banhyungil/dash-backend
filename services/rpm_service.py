@@ -1,7 +1,8 @@
 import math
 import numpy as np
 from itertools import accumulate
-from config import ALLOW_RPM_ERROR_PER_SET, RPM_READ_OFFSET
+from config import RPM_READ_OFFSET
+from services.settings_service import get_setting
 
 
 def calc_rpm(pulse_duration: float, shaft_dia: float, pattern_width: float) -> float:
@@ -144,11 +145,12 @@ def calc_rpm_state(rpm_data: list[float], target_rpm: float) -> str:
     min_rpm = min(rpm_data)
     status = "normal"
 
-    for _k, v in reversed(ALLOW_RPM_ERROR_PER_SET.items()):
+    rpm_error_bands = get_setting("rpm_error_bands") or []
+    for v in reversed(rpm_error_bands):
         low_th = round(target_rpm * (1 - (v["val"] / 100)), 3)
         high_th = round(target_rpm * (1 + (v["val"] / 100)), 3)
         if max_rpm > high_th or min_rpm < low_th:
-            status = v["type"]
+            status = v.get("label", v.get("type", "unknown"))
             break
 
     return status

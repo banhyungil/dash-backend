@@ -2,7 +2,7 @@
 import math
 from pathlib import Path
 
-from config import DEFAULT_SHAFT_DIA, DEFAULT_PATTERN_WIDTH, DEFAULT_TARGET_RPM, ROLL_DIAMETER_MM, GRAVITY_OFFSET
+from services.settings_service import get_setting
 from repos.cycles_repo import find_by_date, find_one
 from services.cached_csv_parser import parse_pulse_cached, parse_vib_cached
 from services.rpm_service import process_pulse_compact_to_rpm
@@ -41,12 +41,17 @@ def build_daily_data(month: str, date: str) -> dict:
     # 유효 사이클만 (is_valid=1: set_count가 expected_count ±10% 이내)
     valid_cycles = [c for c in db_cycles if c["is_valid"]]
 
+    shaft_dia = get_setting("shaft_dia")
+    pattern_width = get_setting("pattern_width")
+    roll_diameter = get_setting("roll_diameter")
+    gravity_offset = get_setting("gravity_offset")
+
     # source_path 기반으로 원본 CSV에서 배열 데이터 로드 (RPM 타임라인, 가속도 파형)
-    result_cycles = _load_pulse_arrays(valid_cycles)
+    result_cycles = _load_pulse_arrays(valid_cycles, shaft_dia, pattern_width, roll_diameter)
     # PULSE_*.csv → VIB_*.csv 경로 변환으로 VIB 가속도 배열 매칭
     _load_vib_arrays(result_cycles)
     # R1/R2는 Z축에서 1g 차감 (센서 장착 방향에 의한 중력 성분 제거)
-    _apply_gravity_correction(result_cycles)
+    _apply_gravity_correction(result_cycles, gravity_offset)
     # DB에 저장된 rms/peak/burst 값을 프론트 응답 형식(stats_pulse_x 등)으로 변환
     _attach_stats(result_cycles)
     # 사이클 간 연속 타임라인 오프셋 계산 (차트 X축 연속 배치용)
@@ -56,9 +61,9 @@ def build_daily_data(month: str, date: str) -> dict:
         "date": date,
         "device": "all",
         "settings": {
-            "shaft_dia": DEFAULT_SHAFT_DIA,
-            "pattern_width": DEFAULT_PATTERN_WIDTH,
-            "target_rpm": DEFAULT_TARGET_RPM,
+            "shaft_dia": shaft_dia,
+            "pattern_width": pattern_width,
+            "target_rpm": get_setting("target_rpm"),
         },
         "cycles": result_cycles,
         "total_cycles": len(result_cycles),
@@ -70,6 +75,9 @@ def build_cycle_detail(date: str, session: str, cycle_index: int) -> dict | None
     cycle = find_one(date, session, cycle_index)
     if not cycle:
         return None
+
+    shaft_dia = get_setting("shaft_dia")
+    pattern_width = get_setting("pattern_width")
 
     source_path = cycle.get("source_path", "")
     result = {
@@ -90,7 +98,7 @@ def build_cycle_detail(date: str, session: str, cycle_index: int) -> dict | None
             raw = parsed["cycles"][cycle_index]
             rpm_result = process_pulse_compact_to_rpm(
                 raw["pulses"], raw["accel_x"], raw["accel_y"], raw["accel_z"],
-                DEFAULT_SHAFT_DIA, DEFAULT_PATTERN_WIDTH,
+                shaft_dia, pattern_width,
             )
             if rpm_result:
                 result["rpm_timeline"] = rpm_result["timeLine"]
@@ -116,7 +124,7 @@ def build_cycle_detail(date: str, session: str, cycle_index: int) -> dict | None
 # 내부 헬퍼
 # ---------------------------------------------------------------------------
 
-def _load_pulse_arrays(valid_cycles: list[dict]) -> list[dict]:
+def _load_pulse_arrays(valid_cycles: list[dict], shaft_dia: float, pattern_width: float, roll_diameter: float) -> list[dict]:
     """source_path로 CSV에서 RPM/가속도 배열 데이터 로드."""
     result = []
     cache: dict[str, dict] = {}
@@ -139,7 +147,7 @@ def _load_pulse_arrays(valid_cycles: list[dict]) -> list[dict]:
         raw = parsed["cycles"][idx]
         rpm_result = process_pulse_compact_to_rpm(
             raw["pulses"], raw["accel_x"], raw["accel_y"], raw["accel_z"],
-            DEFAULT_SHAFT_DIA, DEFAULT_PATTERN_WIDTH,
+            shaft_dia, pattern_width,
         )
 
         if rpm_result:
@@ -147,7 +155,7 @@ def _load_pulse_arrays(valid_cycles: list[dict]) -> list[dict]:
                 **cycle,
                 "rpm_timeline": rpm_result["timeLine"],
                 "rpm_data": rpm_result["dataRPM"],
-                "mpm_data": [_calc_mpm(r, ROLL_DIAMETER_MM) for r in rpm_result["dataRPM"]],
+                "mpm_data": [_calc_mpm(r, roll_diameter) for r in rpm_result["dataRPM"]],
                 "pulse_timeline": rpm_result.get("rawTimeLine", []),
                 "pulse_accel_x": rpm_result.get("rawAccelX", []),
                 "pulse_accel_y": rpm_result.get("rawAccelY", []),
@@ -182,10 +190,10 @@ def _load_vib_arrays(cycles: list[dict]):
             cycle["vib_accel_z"] = vib_cycle["accel_z"]
 
 
-def _apply_gravity_correction(cycles: list[dict]):
+def _apply_gravity_correction(cycles: list[dict], gravity_offset: dict):
     """세션별 Z축 중력 보정."""
     for cycle in cycles:
-        z_off = GRAVITY_OFFSET.get(cycle.get("session", ""), {}).get("z", 0.0)
+        z_off = gravity_offset.get(cycle.get("session", ""), {}).get("z", 0.0)
         if z_off != 0.0:
             if cycle.get("pulse_accel_z"):
                 cycle["pulse_accel_z"] = [v + z_off for v in cycle["pulse_accel_z"]]

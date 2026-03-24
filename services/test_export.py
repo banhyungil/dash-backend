@@ -3,7 +3,7 @@ import shutil
 import csv
 from pathlib import Path
 from typing import List, Dict, Any
-from config import DEVICE_SESSION_MAP
+from services.settings_service import get_setting
 
 
 def copy_raw_csv_files(month: str, date: str, devices: List[str], source_data_dir: Path, dest_dir: Path):
@@ -41,7 +41,7 @@ def copy_raw_csv_files(month: str, date: str, devices: List[str], source_data_di
             vib_file = device_folder / f"VIB_{date}.csv"
 
             # Get session name from device mapping (R1, R2, R3, R4)
-            session_name = DEVICE_SESSION_MAP.get(device, device)
+            session_name = get_setting("device_session_map").get(device, device)
 
             if pulse_file.exists():
                 dest_file = dest_dir / f"{session_name}_PULSE_{date}.csv"
@@ -74,7 +74,7 @@ def create_integrated_csv_raw(
     """
     from services.folder_scanner import get_csv_files
     from services.cached_csv_parser import parse_pulse_cached, parse_vib_cached
-    from config import DEVICE_SESSION_MAP
+    from services.settings_service import get_setting
 
     dest_dir.mkdir(parents=True, exist_ok=True)
 
@@ -84,7 +84,7 @@ def create_integrated_csv_raw(
     # Collect all raw data from all devices
     for device in devices:
         csv_files = get_csv_files(month, date, device)
-        session_name = DEVICE_SESSION_MAP.get(device, device)
+        session_name = get_setting("device_session_map").get(device, device)
 
         # Parse PULSE files
         for pulse_info in csv_files["pulse"]:

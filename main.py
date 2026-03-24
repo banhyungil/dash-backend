@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from routers.cycles import router as cycles_router
 from routers.ingest import router as ingest_router
+from routers.settings import router as settings_router
 from services.database import init_db
 
 
@@ -27,6 +28,7 @@ app.add_middleware(
 # Include routers
 app.include_router(cycles_router)
 app.include_router(ingest_router)
+app.include_router(settings_router)
 
 
 @app.get("/")

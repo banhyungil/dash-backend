@@ -1,6 +1,6 @@
 """Expected pulse count calculation and filtering logic."""
 import math
-from config import EXPECTED_TOLERANCE
+from services.settings_service import get_setting
 
 
 def calculate_expected_pulse_count(
@@ -35,7 +35,7 @@ def is_expected_valid(
     rpm_mean: float,
     shaft_dia: float,
     pattern_width: float,
-    tolerance: float = EXPECTED_TOLERANCE,
+    tolerance: float | None = None,
 ) -> bool:
     """
     Check if actual pulse count (set_count) is within tolerance of expected count.
@@ -50,6 +50,9 @@ def is_expected_valid(
     Returns:
         True if abs(set_count - expected) / expected <= tolerance
     """
+    if tolerance is None:
+        tolerance = get_setting("expected_tolerance")
+
     expected_count = calculate_expected_pulse_count(rpm_mean, shaft_dia, pattern_width)
 
     if expected_count == 0:

@@ -6,10 +6,7 @@ import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
-from config import (
-    DEFAULT_SHAFT_DIA, DEFAULT_PATTERN_WIDTH, DEFAULT_TARGET_RPM,
-    ROLL_DIAMETER_MM, DEVICE_SESSION_MAP, GRAVITY_OFFSET,
-)
+from services.settings_service import get_setting
 from services.csv_parser import parse_pulse_csv, parse_vib_csv
 from services.rpm_service import process_pulse_compact_to_rpm
 from services.expected_filter import is_expected_valid, calculate_expected_pulse_count
@@ -63,6 +60,7 @@ def scan_folder(folder: str) -> list[dict]:
         return []
 
     results = []
+    # recursive glob, 해당 폴더 포함 모든 하위폴더를 glob으로 재귀적으로 탐색
     for csv_path in sorted(folder_path.rglob("*.csv")):
         name = csv_path.name.upper()
         if not (name.startswith("PULSE_") or name.startswith("VIB_")):
@@ -102,12 +100,20 @@ def scan_folder(folder: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def _process_pulse_file(file_path: str, device: str | None = None,
-                        shaft_dia: float = DEFAULT_SHAFT_DIA,
-                        pattern_width: float = DEFAULT_PATTERN_WIDTH) -> dict:
+                        shaft_dia: float | None = None,
+                        pattern_width: float | None = None) -> dict:
     """PULSE CSV를 파싱하고 RPM/MPM을 계산.
     DB 쓰기는 하지 않음 — 멀티프로세싱에서 안전하게 실행 가능.
     반환: db_rows(DB에 넣을 행 목록) + 메타데이터
     """
+    if shaft_dia is None:
+        shaft_dia = get_setting("shaft_dia")
+    if pattern_width is None:
+        pattern_width = get_setting("pattern_width")
+    roll_diameter = get_setting("roll_diameter")
+    device_session_map = get_setting("device_session_map")
+    gravity_offset = get_setting("gravity_offset")
+
     path = Path(file_path)
     source = str(path.resolve())
     filename = path.name
@@ -123,13 +129,13 @@ def _process_pulse_file(file_path: str, device: str | None = None,
     # 경로에서 디바이스 MAC 주소 감지
     if not device:
         for part in path.parts:
-            if part in DEVICE_SESSION_MAP:
+            if part in device_session_map:
                 device = part
                 break
         if not device:
             device = "unknown"
 
-    session = DEVICE_SESSION_MAP.get(device, device)
+    session = device_session_map.get(device, device)
 
     # CSV 파싱 (ast.literal_eval로 각 줄 파싱)
     raw_cycles = parse_pulse_csv(path)
@@ -164,12 +170,12 @@ def _process_pulse_file(file_path: str, device: str | None = None,
             expected_count = calculate_expected_pulse_count(rpm_mean, shaft_dia, pattern_width)
 
             # RPM → MPM 변환 (롤러 지름 기준)
-            mpm_mean = _calc_mpm(rpm_mean, ROLL_DIAMETER_MM)
-            mpm_min = _calc_mpm(rpm_result["rpmMin"], ROLL_DIAMETER_MM)
-            mpm_max = _calc_mpm(rpm_result["rpmMax"], ROLL_DIAMETER_MM)
+            mpm_mean = _calc_mpm(rpm_mean, roll_diameter)
+            mpm_min = _calc_mpm(rpm_result["rpmMin"], roll_diameter)
+            mpm_max = _calc_mpm(rpm_result["rpmMax"], roll_diameter)
 
             # 중력 보정 적용
-            z_off = GRAVITY_OFFSET.get(session, {}).get("z", 0.0)
+            z_off = gravity_offset.get(session, {}).get("z", 0.0)
             corrected_z = [v + z_off for v in accel_z] if z_off != 0.0 else accel_z
 
             # PULSE 축별 진동 stats 계산
@@ -245,39 +251,54 @@ def _process_vib_file(file_path: str) -> dict:
 
 
 def _enrich_vib_stats(pulse_result: dict):
-    """PULSE 결과에 매칭되는 VIB 파일이 있으면 VIB stats를 계산하여 병합."""
+    """PULSE 적재 결과에 매칭되는 VIB 파일의 stats를 병합.
+
+    PULSE_250920.csv → VIB_250920.csv 로 경로 변환하여 매칭.
+    VIB raw 배열은 DB에 저장하지 않고, stats(rms/peak/q1 등)만 계산하여
+    PULSE로 생성된 t_cycle 행에 업데이트한다.
+    """
+    # 1) PULSE 경로에서 VIB 경로 유도 (PULSE_250920.csv → VIB_250920.csv)
     source = pulse_result.get("source", "")
     vib_path = source.replace("PULSE_", "VIB_")
     if vib_path == source or not Path(vib_path).exists():
-        return
+        return  # 매칭되는 VIB 파일 없음
 
+    # 2) VIB CSV 파싱 — 사이클 배열 구조: [{"data": [{"accel_x", "accel_z"}, ...]}, ...]
     try:
         vib_cycles = parse_vib_csv(Path(vib_path))
     except Exception:
         return
 
+    # 3) 세션 확인 — 중력 보정값 조회용 (R1/R2는 Z축 -1g 보정)
     session = None
     for row in pulse_result.get("db_rows", []):
         session = row.get("session")
         break
 
-    z_off = GRAVITY_OFFSET.get(session, {}).get("z", 0.0) if session else 0.0
+    gravity_offset = get_setting("gravity_offset")
+    z_off = gravity_offset.get(session, {}).get("z", 0.0) if session else 0.0
 
+    # 4) PULSE의 각 사이클(db_row)에 대해 동일 인덱스의 VIB 사이클을 매칭
+    #    PULSE cycle_index 0 ↔ VIB cycle_index 0 (동일 시점 데이터)
     for row in pulse_result.get("db_rows", []):
         idx = row["cycle_index"]
         if idx >= len(vib_cycles):
-            continue
+            continue  # VIB 사이클이 PULSE보다 적을 수 있음
 
+        # 5) VIB raw 배열 추출 + Z축 중력 보정
         vib_data = vib_cycles[idx]["data"]
         vib_x = [item.get("accel_x", 0) for item in vib_data]
         vib_z_raw = [item.get("accel_z", 0) for item in vib_data]
         vib_z = [v + z_off for v in vib_z_raw] if z_off != 0.0 else vib_z_raw
 
+        # 6) 축별 stats 계산 (rms, peak, q1, median, q3, exceed, burst 등)
         vx_stats = analyze_axis(vib_x)
         vz_stats = analyze_axis(vib_z)
 
+        # 7) PULSE 행에 VIB stats 병합 — DB INSERT 시 함께 저장됨
         row.update(_flatten_axis_stats("vib_x", vx_stats))
         row.update(_flatten_axis_stats("vib_z", vz_stats))
+        # burst/impact는 PULSE + VIB 합산 (이미 PULSE 분이 들어있으므로 +=)
         row["burst_count"] += vx_stats["burst_count"] + vz_stats["burst_count"]
         row["peak_impact_count"] += vx_stats["peak_impact_count"] + vz_stats["peak_impact_count"]
 
