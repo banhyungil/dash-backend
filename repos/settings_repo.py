@@ -1,5 +1,6 @@
 """Repository for t_settings table."""
 import json
+from typing import Any
 from services import database
 
 
@@ -13,7 +14,7 @@ def get_all() -> list[dict]:
         conn.close()
 
 
-def get(key: str, default=None):
+def get(key: str, default: Any = None) -> Any:
     """단일 설정값 조회. type에 따라 자동 변환."""
     conn = database.get_connection()
     try:
@@ -50,7 +51,7 @@ def reset_all() -> None:
         conn.close()
 
 
-def _cast(value: str, type_: str):
+def _cast(value: str, type_: str) -> Any:
     """type 필드에 따라 문자열을 적절한 타입으로 변환."""
     if type_ == "number":
         return float(value) if "." in value else int(value)

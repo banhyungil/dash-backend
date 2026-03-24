@@ -31,3 +31,4 @@ data/
 data.zip
 
 dash.*
+*.code-workspace

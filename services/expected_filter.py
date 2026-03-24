@@ -51,7 +51,7 @@ def is_expected_valid(
         True if abs(set_count - expected) / expected <= tolerance
     """
     if tolerance is None:
-        tolerance = get_setting("expected_tolerance")
+        tolerance = float(get_setting("expected_tolerance"))
 
     expected_count = calculate_expected_pulse_count(rpm_mean, shaft_dia, pattern_width)
 

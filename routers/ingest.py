@@ -96,7 +96,7 @@ def get_job_status(job_id: str):
 
 
 @router.post("/ingest/upload")
-async def upload(files: list[UploadFile] = File(...), background_tasks: BackgroundTasks = None):
+async def upload(files: list[UploadFile] = File(...), background_tasks: BackgroundTasks = BackgroundTasks()):
     """CSV 파일 업로드 후 비동기 적재."""
     if not files:
         raise HTTPException(400, "No files provided")

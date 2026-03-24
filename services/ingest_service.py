@@ -4,6 +4,7 @@ import logging
 import re
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from collections.abc import Callable
 from pathlib import Path
 
 from services.settings_service import get_setting
@@ -107,9 +108,9 @@ def _process_pulse_file(file_path: str, device: str | None = None,
     반환: db_rows(DB에 넣을 행 목록) + 메타데이터
     """
     if shaft_dia is None:
-        shaft_dia = get_setting("shaft_dia")
+        shaft_dia = float(get_setting("shaft_dia"))
     if pattern_width is None:
-        pattern_width = get_setting("pattern_width")
+        pattern_width = float(get_setting("pattern_width"))
     roll_diameter = get_setting("roll_diameter")
     device_session_map = get_setting("device_session_map")
     gravity_offset = get_setting("gravity_offset")
@@ -335,7 +336,7 @@ def ingest_file(file_path: str, conn=None) -> dict:
 # 배치 적재 (병렬 파싱 + 단일 DB 커밋)
 # ---------------------------------------------------------------------------
 
-def ingest_files(paths: list[str], on_progress: callable = None) -> dict:
+def ingest_files(paths: list[str], on_progress: Callable | None = None) -> dict:
     """여러 CSV 파일을 병렬 파싱 후 한 번에 DB 적재.
 
     Args:

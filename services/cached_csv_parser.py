@@ -40,8 +40,7 @@ def parse_pulse_cached(file_path: str | Path) -> dict:
 
     key = _extract_cache_key(path)
     if key:
-        month, device, session, csv_stem = key
-        cached = read_parsed_cache(month, device, session, csv_stem, path)
+        cached = read_parsed_cache(*key, path)
         if cached is not None:
             return cached
 
@@ -50,7 +49,7 @@ def parse_pulse_cached(file_path: str | Path) -> dict:
     result = _pulse_to_columnar(raw_cycles)
 
     if key:
-        write_parsed_cache(month, device, session, csv_stem, path, result)
+        write_parsed_cache(*key, path, result)
 
     return result
 
@@ -65,8 +64,7 @@ def parse_vib_cached(file_path: str | Path) -> dict:
 
     key = _extract_cache_key(path)
     if key:
-        month, device, session, csv_stem = key
-        cached = read_parsed_cache(month, device, session, csv_stem, path)
+        cached = read_parsed_cache(*key, path)
         if cached is not None:
             return cached
 
@@ -74,7 +72,7 @@ def parse_vib_cached(file_path: str | Path) -> dict:
     result = _vib_to_columnar(raw_cycles)
 
     if key:
-        write_parsed_cache(month, device, session, csv_stem, path, result)
+        write_parsed_cache(*key, path, result)
 
     return result
 

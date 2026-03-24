@@ -1,6 +1,7 @@
 """DB 설정 조회 서비스. t_settings 테이블에서 값을 읽고, 실패 시 fallback 반환."""
+from typing import Any
 
-_FALLBACK = {
+_FALLBACK: dict[str, Any] = {
     "shaft_dia": 50,
     "pattern_width": 10,
     "target_rpm": 100,
@@ -21,7 +22,7 @@ _FALLBACK = {
 }
 
 
-def get_setting(key: str):
+def get_setting(key: str) -> Any:
     """DB에서 설정값 조회. DB 접근 실패 시 fallback 반환."""
     try:
         from repos.settings_repo import get

@@ -9,6 +9,7 @@ Cache structure:
 
 import logging
 from pathlib import Path
+from typing import Any, cast
 
 import msgpack
 
@@ -85,7 +86,7 @@ def read_cache(cache_path: Path, source_path: Path) -> dict | None:
         return None
     try:
         with open(cache_path, "rb") as f:
-            payload = msgpack.unpack(f, raw=False)
+            payload = cast(dict[str, Any], msgpack.unpack(f, raw=False))
         if _is_valid(payload.get("meta", {}), source_path):
             return payload["data"]
         # Stale cache
@@ -136,7 +137,7 @@ def read_manifest() -> dict | None:
         return None
     try:
         with open(mp, "rb") as f:
-            return msgpack.unpack(f, raw=False)
+            return cast(dict[str, Any], msgpack.unpack(f, raw=False))
     except Exception:
         logger.warning("Corrupt manifest: %s", mp)
         return None

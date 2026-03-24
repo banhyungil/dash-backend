@@ -43,7 +43,7 @@ def process_pulse_to_rpm(
     shaft_dia: float,
     pattern_width: float,
     read_offset: int = RPM_READ_OFFSET,
-) -> dict:
+) -> dict | None:
     """Process raw pulse data into RPM with edge masking.
     Returns dict with rpmMean, timeLine, dataRPM, dataAccelX/Y/Z, durationms.
     """
