@@ -95,6 +95,25 @@ def find_by_date(month: str, date: str) -> list[dict]:
         conn.close()
 
 
+def find_one(date: str, session: str, cycle_index: int) -> dict | None:
+    """특정 사이클 1건 조회."""
+    conn = database.get_connection()
+    try:
+        row = conn.execute("""
+            SELECT timestamp, date, month, device, session, cycle_index,
+                   rpm_mean, rpm_min, rpm_max,
+                   mpm_mean, mpm_min, mpm_max,
+                   duration_ms, set_count, expected_count, is_valid,
+                   max_vib_x, max_vib_z, high_vib_event,
+                   source_path
+            FROM t_cycle
+            WHERE date = ? AND session = ? AND cycle_index = ?
+        """, (date, session, cycle_index)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
 def get_monthly_summary() -> dict:
     """Get ingestion status summary by month."""
     conn = database.get_connection()
