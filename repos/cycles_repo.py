@@ -2,6 +2,11 @@
 from services import database
 
 
+_STAT_AXES = ("pulse_x", "pulse_y", "pulse_z", "vib_x", "vib_z")
+_STAT_FIELDS = ("rms", "peak", "min", "max", "q1", "median", "q3",
+                "exceed_count", "exceed_ratio", "exceed_duration_ms")
+_STAT_COLUMNS = [f"{ax}_{f}" for ax in _STAT_AXES for f in _STAT_FIELDS]
+
 _INSERT_SQL = """
     INSERT OR REPLACE INTO t_cycle (
         timestamp, date, month, device, session, cycle_index,
@@ -9,6 +14,8 @@ _INSERT_SQL = """
         mpm_mean, mpm_min, mpm_max,
         duration_ms, set_count, expected_count, is_valid,
         max_vib_x, max_vib_z, high_vib_event,
+        {stat_cols},
+        burst_count, peak_impact_count,
         source_path
     ) VALUES (
         :timestamp, :date, :month, :device, :session, :cycle_index,
@@ -16,9 +23,14 @@ _INSERT_SQL = """
         :mpm_mean, :mpm_min, :mpm_max,
         :duration_ms, :set_count, :expected_count, :is_valid,
         :max_vib_x, :max_vib_z, :high_vib_event,
+        {stat_params},
+        :burst_count, :peak_impact_count,
         :source_path
     )
-"""
+""".format(
+    stat_cols=", ".join(_STAT_COLUMNS),
+    stat_params=", ".join(f":{c}" for c in _STAT_COLUMNS),
+)
 
 
 def insert_many(cycles: list[dict], conn=None) -> int:
@@ -85,11 +97,13 @@ def find_by_date(month: str, date: str) -> list[dict]:
                    mpm_mean, mpm_min, mpm_max,
                    duration_ms, set_count, expected_count, is_valid,
                    max_vib_x, max_vib_z, high_vib_event,
+                   {stat_cols},
+                   burst_count, peak_impact_count,
                    source_path
             FROM t_cycle
             WHERE month = ? AND date = ?
             ORDER BY timestamp
-        """, (month, date)).fetchall()
+        """.format(stat_cols=", ".join(_STAT_COLUMNS)), (month, date)).fetchall()
         return [dict(row) for row in rows]
     finally:
         conn.close()

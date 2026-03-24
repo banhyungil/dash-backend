@@ -8,11 +8,12 @@ from pathlib import Path
 
 from config import (
     DEFAULT_SHAFT_DIA, DEFAULT_PATTERN_WIDTH, DEFAULT_TARGET_RPM,
-    ROLL_DIAMETER_MM, DEVICE_SESSION_MAP,
+    ROLL_DIAMETER_MM, DEVICE_SESSION_MAP, GRAVITY_OFFSET,
 )
 from services.csv_parser import parse_pulse_csv, parse_vib_csv
 from services.rpm_service import process_pulse_compact_to_rpm
 from services.expected_filter import is_expected_valid, calculate_expected_pulse_count
+from services.vibration_analyzer import analyze_axis
 from services import database
 from repos.cycles_repo import insert_many
 from repos.ingested_files_repo import upsert as upsert_ingested_file, exists_by_path
@@ -21,6 +22,16 @@ logger = logging.getLogger(__name__)
 
 # 병렬 처리 최대 워커 수 (CPU 코어 수와 4 중 작은 값)
 _MAX_WORKERS = min(4, os.cpu_count() or 1)
+
+_STATS_KEYS = ("rms", "peak", "min", "max", "q1", "median", "q3",
+               "exceed_count", "exceed_ratio", "exceed_duration_ms")
+
+
+def _flatten_axis_stats(prefix: str, stats: dict | None) -> dict:
+    """analyze_axis() 결과를 '{prefix}_{key}' 형태의 flat dict로 변환."""
+    if stats is None:
+        return {f"{prefix}_{k}": 0 for k in _STATS_KEYS}
+    return {f"{prefix}_{k}": stats.get(k, 0) for k in _STATS_KEYS}
 
 
 def _calc_mpm(rpm: float, roll_dia: float) -> float:
@@ -157,6 +168,16 @@ def _process_pulse_file(file_path: str, device: str | None = None,
             mpm_min = _calc_mpm(rpm_result["rpmMin"], ROLL_DIAMETER_MM)
             mpm_max = _calc_mpm(rpm_result["rpmMax"], ROLL_DIAMETER_MM)
 
+            # 중력 보정 적용
+            z_off = GRAVITY_OFFSET.get(session, {}).get("z", 0.0)
+            corrected_z = [v + z_off for v in accel_z] if z_off != 0.0 else accel_z
+
+            # PULSE 축별 진동 stats 계산
+            px_stats = analyze_axis(accel_x)
+            py_stats = analyze_axis(accel_y)
+            pz_stats = analyze_axis(corrected_z)
+
+            # VIB stats는 매칭 파일이 있을 때 별도 계산 (아래 _enrich_vib_stats에서)
             db_rows.append({
                 "timestamp": cycle["timestamp"],
                 "date": date_str,
@@ -175,9 +196,18 @@ def _process_pulse_file(file_path: str, device: str | None = None,
                 "expected_count": expected_count,
                 "is_valid": 1 if valid else 0,
                 "max_vib_x": max((abs(v) for v in accel_x), default=0),
-                "max_vib_z": max((abs(v) for v in accel_z), default=0),
-                "high_vib_event": 1 if any(abs(v) > 0.3 for v in accel_x + accel_z) else 0,
+                "max_vib_z": max((abs(v) for v in corrected_z), default=0),
+                "high_vib_event": 1 if any(abs(v) > 0.3 for v in accel_x + corrected_z) else 0,
                 "source_path": source,
+                # Phase 5: PULSE 진동 stats (축별 전체)
+                **_flatten_axis_stats("pulse_x", px_stats),
+                **_flatten_axis_stats("pulse_y", py_stats),
+                **_flatten_axis_stats("pulse_z", pz_stats),
+                "burst_count": px_stats["burst_count"] + py_stats["burst_count"] + pz_stats["burst_count"],
+                "peak_impact_count": px_stats["peak_impact_count"] + py_stats["peak_impact_count"] + pz_stats["peak_impact_count"],
+                # VIB stats — 기본값, _enrich_vib_stats에서 업데이트
+                **_flatten_axis_stats("vib_x", None),
+                **_flatten_axis_stats("vib_z", None),
             })
         except Exception as e:
             errors.append(f"Cycle {i}: {e}")
@@ -214,13 +244,53 @@ def _process_vib_file(file_path: str) -> dict:
     }
 
 
+def _enrich_vib_stats(pulse_result: dict):
+    """PULSE 결과에 매칭되는 VIB 파일이 있으면 VIB stats를 계산하여 병합."""
+    source = pulse_result.get("source", "")
+    vib_path = source.replace("PULSE_", "VIB_")
+    if vib_path == source or not Path(vib_path).exists():
+        return
+
+    try:
+        vib_cycles = parse_vib_csv(Path(vib_path))
+    except Exception:
+        return
+
+    session = None
+    for row in pulse_result.get("db_rows", []):
+        session = row.get("session")
+        break
+
+    z_off = GRAVITY_OFFSET.get(session, {}).get("z", 0.0) if session else 0.0
+
+    for row in pulse_result.get("db_rows", []):
+        idx = row["cycle_index"]
+        if idx >= len(vib_cycles):
+            continue
+
+        vib_data = vib_cycles[idx]["data"]
+        vib_x = [item.get("accel_x", 0) for item in vib_data]
+        vib_z_raw = [item.get("accel_z", 0) for item in vib_data]
+        vib_z = [v + z_off for v in vib_z_raw] if z_off != 0.0 else vib_z_raw
+
+        vx_stats = analyze_axis(vib_x)
+        vz_stats = analyze_axis(vib_z)
+
+        row.update(_flatten_axis_stats("vib_x", vx_stats))
+        row.update(_flatten_axis_stats("vib_z", vz_stats))
+        row["burst_count"] += vx_stats["burst_count"] + vz_stats["burst_count"]
+        row["peak_impact_count"] += vx_stats["peak_impact_count"] + vz_stats["peak_impact_count"]
+
+
 def _process_file(file_path: str) -> dict:
     """단일 파일 처리 (파싱 + 계산). DB 쓰기 없음.
     파일명 접두사로 PULSE/VIB 자동 판별.
     """
     name = Path(file_path).name.upper()
     if name.startswith("PULSE_"):
-        return _process_pulse_file(file_path)
+        result = _process_pulse_file(file_path)
+        _enrich_vib_stats(result)
+        return result
     elif name.startswith("VIB_"):
         return _process_vib_file(file_path)
     else:
