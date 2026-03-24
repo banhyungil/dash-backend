@@ -21,7 +21,6 @@ def _make_cycle(**overrides):
         "duration_ms": 2629.37,
         "set_count": 5,
         "expected_count": 5,
-        "is_valid": 1,
         "max_vib_x": 0.08,
         "max_vib_z": 0.02,
         "high_vib_event": 0,
@@ -41,7 +40,7 @@ class TestCyclesRepo:
     def test_insert_and_status(self):
         cycles = [
             _make_cycle(cycle_index=0),
-            _make_cycle(cycle_index=1, is_valid=0),
+            _make_cycle(cycle_index=1),
             _make_cycle(cycle_index=2, high_vib_event=1),
         ]
         inserted = insert_many(cycles)
@@ -55,7 +54,6 @@ class TestCyclesRepo:
         month = status["months"][0]
         assert month["month"] == "2603"
         assert month["total_cycles"] == 3
-        assert month["valid_cycles"] == 2
         assert month["high_vib_events"] == 1
 
     def test_insert_empty(self):

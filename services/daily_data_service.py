@@ -38,16 +38,13 @@ def build_daily_data(month: str, date: str) -> dict:
     if not db_cycles:
         return empty
 
-    # 유효 사이클만 (is_valid=1: set_count가 expected_count ±10% 이내)
-    valid_cycles = [c for c in db_cycles if c["is_valid"]]
-
     shaft_dia = get_setting("shaft_dia")
     pattern_width = get_setting("pattern_width")
     roll_diameter = get_setting("roll_diameter")
     gravity_offset = get_setting("gravity_offset")
 
     # source_path 기반으로 원본 CSV에서 배열 데이터 로드 (RPM 타임라인, 가속도 파형)
-    result_cycles = _load_pulse_arrays(valid_cycles, shaft_dia, pattern_width, roll_diameter)
+    result_cycles = _load_pulse_arrays(db_cycles, shaft_dia, pattern_width, roll_diameter)
     # PULSE_*.csv → VIB_*.csv 경로 변환으로 VIB 가속도 배열 매칭
     _load_vib_arrays(result_cycles)
     # R1/R2는 Z축에서 1g 차감 (센서 장착 방향에 의한 중력 성분 제거)
@@ -124,12 +121,12 @@ def build_cycle_detail(date: str, session: str, cycle_index: int) -> dict | None
 # 내부 헬퍼
 # ---------------------------------------------------------------------------
 
-def _load_pulse_arrays(valid_cycles: list[dict], shaft_dia: float, pattern_width: float, roll_diameter: float) -> list[dict]:
+def _load_pulse_arrays(cycles: list[dict], shaft_dia: float, pattern_width: float, roll_diameter: float) -> list[dict]:
     """source_path로 CSV에서 RPM/가속도 배열 데이터 로드."""
     result = []
     cache: dict[str, dict] = {}
 
-    for cycle in valid_cycles:
+    for cycle in cycles:
         source_path = cycle.get("source_path")
         if not source_path or not Path(source_path).exists():
             result.append({**cycle, **_EMPTY_ARRAYS})

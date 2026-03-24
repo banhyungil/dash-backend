@@ -12,7 +12,7 @@ _INSERT_SQL = """
         timestamp, date, month, device, session, cycle_index,
         rpm_mean, rpm_min, rpm_max,
         mpm_mean, mpm_min, mpm_max,
-        duration_ms, set_count, expected_count, is_valid,
+        duration_ms, set_count, expected_count,
         max_vib_x, max_vib_z, high_vib_event,
         {stat_cols},
         burst_count, peak_impact_count,
@@ -21,7 +21,7 @@ _INSERT_SQL = """
         :timestamp, :date, :month, :device, :session, :cycle_index,
         :rpm_mean, :rpm_min, :rpm_max,
         :mpm_mean, :mpm_min, :mpm_max,
-        :duration_ms, :set_count, :expected_count, :is_valid,
+        :duration_ms, :set_count, :expected_count,
         :max_vib_x, :max_vib_z, :high_vib_event,
         {stat_params},
         :burst_count, :peak_impact_count,
@@ -75,7 +75,6 @@ def get_dates(month: str) -> list[dict]:
         rows = conn.execute("""
             SELECT date,
                    COUNT(*) AS cycle_count,
-                   SUM(CASE WHEN is_valid = 1 THEN 1 ELSE 0 END) AS valid_count,
                    SUM(CASE WHEN high_vib_event = 1 THEN 1 ELSE 0 END) AS high_vib_events
             FROM t_cycle
             WHERE month = ?
@@ -95,7 +94,7 @@ def find_by_date(month: str, date: str) -> list[dict]:
             SELECT timestamp, date, month, device, session, cycle_index,
                    rpm_mean, rpm_min, rpm_max,
                    mpm_mean, mpm_min, mpm_max,
-                   duration_ms, set_count, expected_count, is_valid,
+                   duration_ms, set_count, expected_count,
                    max_vib_x, max_vib_z, high_vib_event,
                    {stat_cols},
                    burst_count, peak_impact_count,
@@ -117,7 +116,7 @@ def find_one(date: str, session: str, cycle_index: int) -> dict | None:
             SELECT timestamp, date, month, device, session, cycle_index,
                    rpm_mean, rpm_min, rpm_max,
                    mpm_mean, mpm_min, mpm_max,
-                   duration_ms, set_count, expected_count, is_valid,
+                   duration_ms, set_count, expected_count,
                    max_vib_x, max_vib_z, high_vib_event,
                    source_path
             FROM t_cycle
@@ -137,7 +136,6 @@ def get_monthly_summary() -> dict:
                 month,
                 COUNT(DISTINCT date) AS date_count,
                 COUNT(*) AS total_cycles,
-                SUM(CASE WHEN is_valid = 1 THEN 1 ELSE 0 END) AS valid_cycles,
                 SUM(CASE WHEN high_vib_event = 1 THEN 1 ELSE 0 END) AS high_vib_events
             FROM t_cycle
             GROUP BY month

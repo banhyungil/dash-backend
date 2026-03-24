@@ -10,7 +10,7 @@ from pathlib import Path
 from services.settings_service import get_setting
 from services.csv_parser import parse_pulse_csv, parse_vib_csv
 from services.rpm_service import process_pulse_compact_to_rpm
-from services.expected_filter import is_expected_valid, calculate_expected_pulse_count
+from services.expected_filter import calculate_expected_pulse_count
 from services.vibration_analyzer import analyze_axis
 from services import database
 from repos.cycles_repo import insert_many
@@ -167,7 +167,6 @@ def _process_pulse_file(file_path: str, device: str | None = None,
                 continue
 
             rpm_mean = rpm_result["rpmMean"]
-            valid = is_expected_valid(set_count, rpm_mean, shaft_dia, pattern_width)
             expected_count = calculate_expected_pulse_count(rpm_mean, shaft_dia, pattern_width)
 
             # RPM → MPM 변환 (롤러 지름 기준)
@@ -201,7 +200,6 @@ def _process_pulse_file(file_path: str, device: str | None = None,
                 "duration_ms": round(rpm_result["durationms"], 2),
                 "set_count": set_count,
                 "expected_count": expected_count,
-                "is_valid": 1 if valid else 0,
                 "max_vib_x": max((abs(v) for v in accel_x), default=0),
                 "max_vib_z": max((abs(v) for v in corrected_z), default=0),
                 "high_vib_event": 1 if any(abs(v) > 0.3 for v in accel_x + corrected_z) else 0,

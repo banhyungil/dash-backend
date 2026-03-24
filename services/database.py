@@ -38,7 +38,6 @@ CREATE TABLE IF NOT EXISTS t_cycle (
     duration_ms     REAL,
     set_count       INTEGER,
     expected_count  INTEGER,
-    is_valid        INTEGER DEFAULT 1,
 
     -- Vibration events
     max_vib_x       REAL,
