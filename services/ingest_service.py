@@ -202,7 +202,6 @@ def _process_pulse_file(file_path: str, device: str | None = None,
                 "expected_count": expected_count,
                 "max_vib_x": max((abs(v) for v in accel_x), default=0),
                 "max_vib_z": max((abs(v) for v in corrected_z), default=0),
-                "high_vib_event": 1 if any(abs(v) > 0.3 for v in accel_x + corrected_z) else 0,
                 "source_path": source,
                 # Phase 5: PULSE 진동 stats (축별 전체)
                 **_flatten_axis_stats("pulse_x", px_stats),

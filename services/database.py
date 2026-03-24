@@ -39,10 +39,9 @@ CREATE TABLE IF NOT EXISTS t_cycle (
     set_count       INTEGER,
     expected_count  INTEGER,
 
-    -- Vibration events
+    -- Vibration peaks
     max_vib_x       REAL,
     max_vib_z       REAL,
-    high_vib_event  INTEGER DEFAULT 0,
 
     -- Vibration stats (Phase 5: ingest 시 계산)
     -- rms / peak
@@ -145,6 +144,7 @@ _DEFAULT_SETTINGS = [
     ("device_session_map", '{"0013A20041F71B01":"R1","0013A20041F9D466":"R2","0013A20041F98275":"R3","0013A20041F9D4F8":"R4"}', "json", "디바이스→세션 매핑", "device"),
     ("gravity_offset", '{"R1":{"z":-1.0},"R2":{"z":-1.0},"R3":{"z":0.0},"R4":{"z":0.0}}', "json", "중력 보정값", "device"),
     ("rpm_error_bands", '[{"val":10,"label":"stage01","color":"#DDCC00"},{"val":20,"label":"stage02","color":"#FF5E00"},{"val":30,"label":"stage03","color":"#FF0000"}]', "json", "RPM 허용 밴드", "validation"),
+    ("vib_threshold", "0.3", "number", "고진동 임계값(g)", "vibration"),
 ]
 
 

@@ -23,7 +23,6 @@ def _make_cycle(**overrides):
         "expected_count": 5,
         "max_vib_x": 0.08,
         "max_vib_z": 0.02,
-        "high_vib_event": 0,
         "burst_count": 2,
         "peak_impact_count": 1,
         "source_path": "/test/PULSE_260311.csv",
@@ -41,7 +40,7 @@ class TestCyclesRepo:
         cycles = [
             _make_cycle(cycle_index=0),
             _make_cycle(cycle_index=1),
-            _make_cycle(cycle_index=2, high_vib_event=1),
+            _make_cycle(cycle_index=2, max_vib_x=0.5),
         ]
         inserted = insert_many(cycles)
         assert inserted == 3

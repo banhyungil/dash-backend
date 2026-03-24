@@ -36,10 +36,9 @@ CREATE TABLE t_cycle (
     set_count       INTEGER,
     expected_count  INTEGER,
 
-    -- Vibration events
+    -- Vibration peaks
     max_vib_x       REAL,
     max_vib_z       REAL,
-    high_vib_event  INTEGER DEFAULT 0,
 
     -- Source tracking
     source_path     TEXT,
