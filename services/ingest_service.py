@@ -6,6 +6,7 @@ import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from collections.abc import Callable
 from pathlib import Path
+from typing import TypedDict
 
 from services.settings_service import get_setting
 from services.csv_parser import parse_pulse_csv, parse_vib_csv
@@ -20,6 +21,137 @@ from repos.vib_waveform_repo import insert as insert_vib_waveform
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# TypedDict 정의
+# ---------------------------------------------------------------------------
+
+
+class AxisStats(TypedDict):
+    """축별 통계 — analyze_axis() 반환값. PULSE/VIB 공통."""
+    rms: float
+    peak: float
+    min: float
+    max: float
+    q1: float
+    median: float
+    q3: float
+    exceed_count: int
+    exceed_ratio: float
+    exceed_duration_ms: float
+    burst_count: int
+    peak_impact_count: int
+
+
+class PulseRawCycle(TypedDict):
+    """PULSE CSV 사이클 1개 — RPM/MPM + PULSE 3축 stats + 원시 파형."""
+    timestamp: str
+    date: str
+    month: str
+    device: str | None
+    device_name: str
+    cycle_index: int
+    rpm_mean: float
+    rpm_min: float
+    rpm_max: float
+    mpm_mean: float
+    mpm_min: float
+    mpm_max: float
+    duration_ms: float
+    set_count: int
+    expected_count: int
+    pulse_x_stats: AxisStats
+    pulse_y_stats: AxisStats
+    pulse_z_stats: AxisStats
+    burst_count: int
+    peak_impact_count: int
+    raw_pulses: list[int]
+    raw_accel_x: list[float]
+    raw_accel_y: list[float]
+    raw_accel_z: list[float]
+
+
+class PulseResult(TypedDict):
+    """PULSE 파일 처리 결과."""
+    filename: str
+    source: str
+    cycles: list[PulseRawCycle]
+    skipped: int
+    errors: list[str]
+
+
+class VibRawCycle(TypedDict):
+    """VIB CSV 사이클 1개 — VIB 2축 stats + 원시 파형."""
+    cycle_index: int
+    accel_x: list[float]
+    accel_z: list[float]
+    vib_x_stats: AxisStats
+    vib_z_stats: AxisStats
+
+
+class VibResult(TypedDict):
+    """VIB 파일 처리 결과."""
+    filename: str
+    source: str
+    cycles: list[VibRawCycle]
+    skipped: int
+    errors: list[str]
+
+
+class MergedCycle(TypedDict):
+    """_merge_pulse_vib() 결과 — PULSE + VIB 합산. _write_to_db() 입력."""
+    timestamp: str
+    date: str
+    month: str
+    device: str | None
+    device_name: str
+    cycle_index: int
+    rpm_mean: float
+    rpm_min: float
+    rpm_max: float
+    mpm_mean: float
+    mpm_min: float
+    mpm_max: float
+    duration_ms: float
+    set_count: int
+    expected_count: int
+    pulse_x_stats: AxisStats
+    pulse_y_stats: AxisStats
+    pulse_z_stats: AxisStats
+    vib_x_stats: AxisStats
+    vib_z_stats: AxisStats
+    max_vib_x: float
+    max_vib_z: float
+    burst_count: int
+    peak_impact_count: int
+    raw_pulses: list[int]
+    raw_accel_x: list[float]
+    raw_accel_y: list[float]
+    raw_accel_z: list[float]
+    vib_accel_x: list[float]
+    vib_accel_z: list[float]
+
+
+class IngestDetail(TypedDict):
+    """API 응답용 파일별 적재 결과."""
+    filename: str
+    cycles_ingested: int
+    cycles_skipped: int
+    errors: list[str]
+
+
+class IngestBatchResult(TypedDict):
+    """API 응답용 배치 적재 결과."""
+    total_files: int
+    success_cycles: int
+    skipped_cycles: int
+    failed_lines: int
+    details: list[IngestDetail]
+
+
+# ---------------------------------------------------------------------------
+# 상수 / 헬퍼
+# ---------------------------------------------------------------------------
+
 # 병렬 처리 최대 워커 수 (CPU 코어 수와 4 중 작은 값)
 _MAX_WORKERS = min(4, os.cpu_count() or 1)
 
@@ -27,7 +159,7 @@ _STATS_KEYS = ("rms", "peak", "min", "max", "q1", "median", "q3",
                "exceed_count", "exceed_ratio", "exceed_duration_ms")
 
 
-def _flatten_axis_stats(prefix: str, stats: dict | None) -> dict:
+def _flatten_axis_stats(prefix: str, stats: AxisStats | None) -> dict[str, float | int]:
     """analyze_axis() 결과를 '{prefix}_{key}' 형태의 flat dict로 변환."""
     if stats is None:
         return {f"{prefix}_{k}": 0 for k in _STATS_KEYS}
@@ -102,23 +234,16 @@ def scan_folder(folder: str) -> list[dict]:
 # 파싱 + 계산 (CPU 작업, 워커 프로세스에서 실행)
 # ---------------------------------------------------------------------------
 
-def _process_pulse_file(file_path: str, device: str | None = None,
-                        shaft_dia: float | None = None,
-                        pattern_width: float | None = None) -> dict:
-    """PULSE CSV를 파싱하고 RPM/MPM을 계산.
-    DB 쓰기는 하지 않음 — 멀티프로세싱에서 안전하게 실행 가능.
-    반환: db_rows(DB에 넣을 행 목록) + 메타데이터
+def _process_pulse(file_path: str, device: str | None = None,
+                    shaft_dia: float | None = None,
+                    pattern_width: float | None = None) -> PulseResult:
+    """PULSE CSV를 파싱하고 RPM/MPM을 계산. VIB 로직 없음.
 
     처리 흐름:
       1. 설정값 로드 (shaft_dia, pattern_width, roll_diameter 등)
       2. 파일명에서 날짜/월 추출, 경로에서 디바이스 MAC 감지
       3. CSV 파싱 → 사이클 배열 획득
-      4. 사이클별 루프:
-         a) 펄스 간격 → RPM 변환 (에지 마스킹으로 노이즈 제거)
-         b) RPM → MPM 변환 (롤러 지름 기준)
-         c) Z축 중력 보정 (R1/R2는 센서 장착 방향에 따라 ±1g 보정)
-         d) 축별 진동 통계 계산 (rms, peak, burst 등)
-         e) DB INSERT용 dict 생성
+      4. 사이클별: RPM/MPM 계산, Z축 중력 보정, PULSE 3축 stats 계산
     """
     # --- 1) 설정값 로드 ---
     if shaft_dia is None:
@@ -126,23 +251,22 @@ def _process_pulse_file(file_path: str, device: str | None = None,
     if pattern_width is None:
         pattern_width = float(get_setting("pattern_width"))
     roll_diameter = get_setting("roll_diameter")
-    device_name_map = get_setting("device_name_map")  # MAC → 디바이스명 (예: "0013A2..." → "R1")
-    gravity_offset = get_setting("gravity_offset")    # 디바이스명별 중력 보정값
+    device_name_map = get_setting("device_name_map")
+    gravity_offset = get_setting("gravity_offset")
 
     # --- 2) 파일 메타 추출 ---
     path = Path(file_path)
     source = str(path.resolve())
     filename = path.name
-    date_str = _extract_date_from_filename(filename)  # PULSE_260311.csv → "260311"
+    date_str = _extract_date_from_filename(filename)
 
     if not date_str:
-        return {"filename": filename, "db_rows": [], "skipped": 0,
-                "errors": [f"파일명에서 날짜 추출 불가: {filename}"],
-                "source": source, "file_type": "PULSE"}
+        return PulseResult(filename=filename, source=source, cycles=[],
+                           skipped=0, errors=[f"파일명에서 날짜 추출 불가: {filename}"])
 
-    month = _extract_month_from_date(date_str)  # "260311" → "2603"
+    month = _extract_month_from_date(date_str)
 
-    # 파일 경로에서 디바이스 MAC 주소 감지 (경로에 MAC 폴더가 포함됨)
+    # 파일 경로에서 디바이스 MAC 주소 감지
     if not device:
         for part in path.parts:
             if part in device_name_map:
@@ -151,235 +275,251 @@ def _process_pulse_file(file_path: str, device: str | None = None,
         if not device:
             device = "unknown"
 
-    device_name = device_name_map.get(device, device)  # MAC → 디바이스명 (예: "R1")
+    device_name = device_name_map.get(device, device)
 
     # --- 3) CSV 파싱 ---
-    # 각 줄이 하나의 사이클, 사이클 안에 펄스+가속도 배열
     raw_cycles = parse_pulse_csv(path)
     if not raw_cycles:
-        return {"filename": filename, "db_rows": [], "skipped": 0,
-                "errors": ["파싱된 사이클 없음"], "source": source, "file_type": "PULSE"}
+        return PulseResult(filename=filename, source=source, cycles=[],
+                           skipped=0, errors=["파싱된 사이클 없음"])
 
-    db_rows = []
+    cycles: list[PulseRawCycle] = []
     skipped = 0
-    errors = []
+    errors: list[str] = []
 
     # --- 4) 사이클별 처리 ---
     for i, cycle in enumerate(raw_cycles):
         try:
-            # 사이클에서 펄스/가속도 배열 추출
             data = cycle["data"]
-            # 대괄호 [ ] : 리스트 컴프리헨션
-            pulses = [item["pulse"] for item in data]       # 펄스 간격 (μs)
-            accel_x = [item.get("accel_x", 0) for item in data]  # X축 가속도 (g)
+            pulses = [item["pulse"] for item in data]
+            accel_x = [item.get("accel_x", 0) for item in data]
             accel_y = [item.get("accel_y", 0) for item in data]
             accel_z = [item.get("accel_z", 0) for item in data]
-            set_count = len(pulses)  # 실측 펄스 수
+            set_count = len(pulses)
 
-            # 4a) 펄스 간격 → RPM 변환 + 에지 마스킹 (패턴 경계의 노이즈 제거)
+            # RPM 계산
             rpm_result = process_pulse_compact_to_rpm(
                 pulses, accel_x, accel_y, accel_z, shaft_dia, pattern_width
             )
-
-            if rpm_result is None:  # 데이터 부족으로 RPM 계산 불가
+            if rpm_result is None:
                 skipped += 1
                 continue
 
             rpm_mean = rpm_result["rpmMean"]
-            # RPM 평균으로 이론적 펄스 수 계산 (참고용, DB 저장)
             expected_count = calculate_expected_pulse_count(rpm_mean, shaft_dia, pattern_width)
 
-            # 4b) RPM → MPM 변환: RPM × π × 롤러지름 / 1000
+            # MPM 변환
             mpm_mean = _calc_mpm(rpm_mean, roll_diameter)
             mpm_min = _calc_mpm(rpm_result["rpmMin"], roll_diameter)
             mpm_max = _calc_mpm(rpm_result["rpmMax"], roll_diameter)
 
-            # 4c) Z축 중력 보정 (R1: +1g, R2: -1g → 센서 장착 방향에 의한 중력 성분 제거)
+            # Z축 중력 보정
             z_off = gravity_offset.get(device_name, {}).get("z", 0.0)
             corrected_z = [v + z_off for v in accel_z] if z_off != 0.0 else accel_z
 
-            # 4d) PULSE 축별 진동 stats (rms, peak, q1, median, q3, burst, exceed 등)
-            px_stats = analyze_axis(accel_x)
-            py_stats = analyze_axis(accel_y)
-            pz_stats = analyze_axis(corrected_z)
+            # PULSE 3축 stats
+            px_stats: AxisStats = analyze_axis(accel_x)
+            py_stats: AxisStats = analyze_axis(accel_y)
+            pz_stats: AxisStats = analyze_axis(corrected_z)
 
-            # 4e) DB INSERT용 dict 조립
-            # VIB stats는 기본값 0으로 채움 → _enrich_vib_stats()에서 매칭 VIB 파일이 있으면 업데이트
-            db_rows.append({
-                "timestamp": cycle["timestamp"],
-                "date": date_str,
-                "month": month,
-                "device": device,
-                "device_name": device_name,
-                "cycle_index": i,
-                "rpm_mean": round(rpm_mean, 2),
-                "rpm_min": round(rpm_result["rpmMin"], 2),
-                "rpm_max": round(rpm_result["rpmMax"], 2),
-                "mpm_mean": mpm_mean,
-                "mpm_min": mpm_min,
-                "mpm_max": mpm_max,
-                "duration_ms": round(rpm_result["durationms"], 2),
-                "set_count": set_count,
-                "expected_count": expected_count,
-                "max_vib_x": max((abs(v) for v in accel_x), default=0),
-                "max_vib_z": max((abs(v) for v in corrected_z), default=0),
-                "_raw_pulses": pulses,
-                "_raw_accel_x": accel_x,
-                "_raw_accel_y": accel_y,
-                "_raw_accel_z": corrected_z,
-                **_flatten_axis_stats("pulse_x", px_stats),
-                **_flatten_axis_stats("pulse_y", py_stats),
-                **_flatten_axis_stats("pulse_z", pz_stats),
-                "burst_count": px_stats["burst_count"] + py_stats["burst_count"] + pz_stats["burst_count"],
-                "peak_impact_count": px_stats["peak_impact_count"] + py_stats["peak_impact_count"] + pz_stats["peak_impact_count"],
-                **_flatten_axis_stats("vib_x", None),  # VIB 기본값 (0)
-                **_flatten_axis_stats("vib_z", None),
-            })
+            cycles.append(PulseRawCycle(
+                timestamp=cycle["timestamp"],
+                date=date_str,
+                month=month,
+                device=device,
+                device_name=device_name,
+                cycle_index=i,
+                rpm_mean=round(rpm_mean, 2),
+                rpm_min=round(rpm_result["rpmMin"], 2),
+                rpm_max=round(rpm_result["rpmMax"], 2),
+                mpm_mean=mpm_mean,
+                mpm_min=mpm_min,
+                mpm_max=mpm_max,
+                duration_ms=round(rpm_result["durationms"], 2),
+                set_count=set_count,
+                expected_count=expected_count,
+                pulse_x_stats=px_stats,
+                pulse_y_stats=py_stats,
+                pulse_z_stats=pz_stats,
+                burst_count=px_stats["burst_count"] + py_stats["burst_count"] + pz_stats["burst_count"],
+                peak_impact_count=px_stats["peak_impact_count"] + py_stats["peak_impact_count"] + pz_stats["peak_impact_count"],
+                raw_pulses=pulses,
+                raw_accel_x=accel_x,
+                raw_accel_y=accel_y,
+                raw_accel_z=corrected_z,
+            ))
         except Exception as e:
             errors.append(f"Cycle {i}: {e}")
             skipped += 1
 
-    return {
-        "filename": filename,
-        "db_rows": db_rows,
-        "skipped": skipped,
-        "errors": errors,
-        "source": source,
-        "file_type": "PULSE",
-    }
+    return PulseResult(filename=filename, source=source, cycles=cycles,
+                       skipped=skipped, errors=errors)
 
 
-def _process_vib_file(file_path: str) -> dict:
-    """VIB CSV 파싱. 배열 데이터는 DB에 넣지 않고 메타데이터만 반환.
-    (VIB 배열은 사이클당 5,000+ 포인트로 DB에 넣기엔 너무 큼)
-    """
+def _process_vib(file_path: str) -> VibResult:
+    """VIB CSV 파싱 + 축별 stats 계산."""
     path = Path(file_path)
     source = str(path.resolve())
     filename = path.name
 
+    # 중력 보정용 설정
+    device_name_map = get_setting("device_name_map")
+    gravity_offset = get_setting("gravity_offset")
+
+    # 경로에서 디바이스명 추출
+    device = "unknown"
+    for part in path.parts:
+        if part in device_name_map:
+            device = part
+            break
+    device_name = device_name_map.get(device, device)
+    z_off = gravity_offset.get(device_name, {}).get("z", 0.0)
+
     raw_cycles = parse_vib_csv(path)
 
-    vib_raw_cycles = []
-    for vc in raw_cycles:
+    cycles: list[VibRawCycle] = []
+    for i, vc in enumerate(raw_cycles):
         vib_data = vc["data"]
-        vib_raw_cycles.append({
-            "accel_x": [item.get("accel_x", 0) for item in vib_data],
-            "accel_z": [item.get("accel_z", 0) for item in vib_data],
-        })
-
-    return {
-        "filename": filename,
-        "db_rows": [],
-        "skipped": 0,
-        "errors": [],
-        "source": source,
-        "file_type": "VIB",
-        "vib_cycle_count": len(raw_cycles),
-        "vib_raw_cycles": vib_raw_cycles,
-    }
-
-
-def _enrich_vib_stats(pulse_result: dict, vib_file_path: str | None = None):
-    """PULSE 적재 결과에 매칭되는 VIB 파일의 stats를 병합.
-
-    vib_file_path가 주어지면 해당 파일을 직접 파싱.
-    VIB raw 배열은 _vib_accel_x, _vib_accel_z 키로 db_rows에 추가하고,
-    stats(rms/peak/q1 등)만 계산하여 PULSE로 생성된 t_cycle 행에 업데이트한다.
-    """
-    # 1) VIB 파일 경로 확인
-    if not vib_file_path or not Path(vib_file_path).exists():
-        return  # 매칭되는 VIB 파일 없음
-
-    # 2) VIB CSV 파싱 — 사이클 배열 구조: [{"data": [{"accel_x", "accel_z"}, ...]}, ...]
-    try:
-        vib_cycles = parse_vib_csv(Path(vib_file_path))
-    except Exception:
-        return
-
-    # 3) 디바이스명 확인 — 중력 보정값 조회용 (R1/R2는 Z축 -1g 보정)
-    device_name = None
-    for row in pulse_result.get("db_rows", []):
-        device_name = row.get("device_name")
-        break
-
-    gravity_offset = get_setting("gravity_offset")
-    z_off = gravity_offset.get(device_name, {}).get("z", 0.0) if device_name else 0.0
-
-    # 4) PULSE의 각 사이클(db_row)에 대해 동일 인덱스의 VIB 사이클을 매칭
-    #    PULSE cycle_index 0 ↔ VIB cycle_index 0 (동일 시점 데이터)
-    for row in pulse_result.get("db_rows", []):
-        idx = row["cycle_index"]
-        if idx >= len(vib_cycles):
-            continue  # VIB 사이클이 PULSE보다 적을 수 있음
-
-        # 5) VIB raw 배열 추출 + Z축 중력 보정
-        vib_data = vib_cycles[idx]["data"]
         vib_x = [item.get("accel_x", 0) for item in vib_data]
         vib_z_raw = [item.get("accel_z", 0) for item in vib_data]
         vib_z = [v + z_off for v in vib_z_raw] if z_off != 0.0 else vib_z_raw
 
-        # 6) 축별 stats 계산 (rms, peak, q1, median, q3, exceed, burst 등)
-        vx_stats = analyze_axis(vib_x)
-        vz_stats = analyze_axis(vib_z)
+        vx_stats: AxisStats = analyze_axis(vib_x)
+        vz_stats: AxisStats = analyze_axis(vib_z)
 
-        # 7) PULSE 행에 VIB stats 병합 — DB INSERT 시 함께 저장됨
-        row.update(_flatten_axis_stats("vib_x", vx_stats))
-        row.update(_flatten_axis_stats("vib_z", vz_stats))
-        # burst/impact는 PULSE + VIB 합산 (이미 PULSE 분이 들어있으므로 +=)
-        row["burst_count"] += vx_stats["burst_count"] + vz_stats["burst_count"]
-        row["peak_impact_count"] += vx_stats["peak_impact_count"] + vz_stats["peak_impact_count"]
+        cycles.append(VibRawCycle(
+            cycle_index=i,
+            accel_x=vib_x,
+            accel_z=vib_z,
+            vib_x_stats=vx_stats,
+            vib_z_stats=vz_stats,
+        ))
 
-        # 8) VIB 원시 배열을 db_rows에 추가 (파형 DB 저장용)
-        row["_vib_accel_x"] = vib_x
-        row["_vib_accel_z"] = vib_z
+    return VibResult(filename=filename, source=source, cycles=cycles,
+                     skipped=0, errors=[])
 
 
-def _process_file(file_path: str) -> dict:
+def _merge_pulse_vib(pulse_result: PulseResult,
+                     vib_result: VibResult | None) -> list[MergedCycle]:
+    """PULSE + VIB를 cycle_index로 매칭하여 MergedCycle 리스트 반환."""
+    _empty_axis = AxisStats(
+        rms=0, peak=0, min=0, max=0,
+        q1=0, median=0, q3=0,
+        exceed_count=0, exceed_ratio=0, exceed_duration_ms=0,
+        burst_count=0, peak_impact_count=0,
+    )
+
+    # VIB cycle을 index로 빠르게 조회
+    vib_by_index: dict[int, VibRawCycle] = {}
+    if vib_result:
+        for vc in vib_result["cycles"]:
+            vib_by_index[vc["cycle_index"]] = vc
+
+    merged: list[MergedCycle] = []
+    for pc in pulse_result["cycles"]:
+        vc = vib_by_index.get(pc["cycle_index"])
+
+        if vc:
+            vib_x_stats = vc["vib_x_stats"]
+            vib_z_stats = vc["vib_z_stats"]
+            vib_accel_x = vc["accel_x"]
+            vib_accel_z = vc["accel_z"]
+            max_vib_x = max((abs(v) for v in vib_accel_x), default=0)
+            max_vib_z = max((abs(v) for v in vib_accel_z), default=0)
+            burst_count = pc["burst_count"] + vib_x_stats["burst_count"] + vib_z_stats["burst_count"]
+            peak_impact_count = pc["peak_impact_count"] + vib_x_stats["peak_impact_count"] + vib_z_stats["peak_impact_count"]
+        else:
+            vib_x_stats = _empty_axis
+            vib_z_stats = _empty_axis
+            vib_accel_x = []
+            vib_accel_z = []
+            max_vib_x = max((abs(v) for v in pc["raw_accel_x"]), default=0)
+            max_vib_z = max((abs(v) for v in pc["raw_accel_z"]), default=0)
+            burst_count = pc["burst_count"]
+            peak_impact_count = pc["peak_impact_count"]
+
+        merged.append(MergedCycle(
+            timestamp=pc["timestamp"],
+            date=pc["date"],
+            month=pc["month"],
+            device=pc["device"],
+            device_name=pc["device_name"],
+            cycle_index=pc["cycle_index"],
+            rpm_mean=pc["rpm_mean"],
+            rpm_min=pc["rpm_min"],
+            rpm_max=pc["rpm_max"],
+            mpm_mean=pc["mpm_mean"],
+            mpm_min=pc["mpm_min"],
+            mpm_max=pc["mpm_max"],
+            duration_ms=pc["duration_ms"],
+            set_count=pc["set_count"],
+            expected_count=pc["expected_count"],
+            pulse_x_stats=pc["pulse_x_stats"],
+            pulse_y_stats=pc["pulse_y_stats"],
+            pulse_z_stats=pc["pulse_z_stats"],
+            vib_x_stats=vib_x_stats,
+            vib_z_stats=vib_z_stats,
+            max_vib_x=max_vib_x,
+            max_vib_z=max_vib_z,
+            burst_count=burst_count,
+            peak_impact_count=peak_impact_count,
+            raw_pulses=pc["raw_pulses"],
+            raw_accel_x=pc["raw_accel_x"],
+            raw_accel_y=pc["raw_accel_y"],
+            raw_accel_z=pc["raw_accel_z"],
+            vib_accel_x=vib_accel_x,
+            vib_accel_z=vib_accel_z,
+        ))
+
+    return merged
+
+
+def _process_file(file_path: str) -> tuple[list[MergedCycle], PulseResult | VibResult]:
     """단일 파일 처리 (파싱 + 계산). DB 쓰기 없음.
-    파일명 접두사로 PULSE/VIB 자동 판별.
+    PULSE 파일이면 VIB 파일도 찾아서 merge.
+    반환: (merged_cycles, 원본 result)
     """
     path = Path(file_path)
     name = path.name.upper()
     if name.startswith("PULSE_"):
-        result = _process_pulse_file(file_path)
+        pulse_result = _process_pulse(file_path)
         # PULSE 경로에서 VIB 경로 유도 (PULSE_250920.csv → VIB_250920.csv)
         vib_file_path = str(path.parent / path.name.replace("PULSE_", "VIB_"))
-        _enrich_vib_stats(result, vib_file_path=vib_file_path)
-        return result
+        vib_result: VibResult | None = None
+        if Path(vib_file_path).exists():
+            vib_result = _process_vib(vib_file_path)
+        merged = _merge_pulse_vib(pulse_result, vib_result)
+        return merged, pulse_result
     elif name.startswith("VIB_"):
-        return _process_vib_file(file_path)
+        vib_result = _process_vib(file_path)
+        return [], vib_result
     else:
-        return {"filename": Path(file_path).name, "db_rows": [], "skipped": 0,
-                "errors": [f"알 수 없는 파일 타입: {name}"], "source": file_path,
-                "file_type": "UNKNOWN"}
+        empty_result = PulseResult(
+            filename=Path(file_path).name, source=file_path,
+            cycles=[], skipped=0, errors=[f"알 수 없는 파일 타입: {name}"])
+        return [], empty_result
 
 
 # ---------------------------------------------------------------------------
 # 단건 적재 (순차 처리)
 # ---------------------------------------------------------------------------
 
-def ingest_file(file_path: str, conn=None) -> dict:
+def ingest_file(file_path: str, conn=None) -> IngestDetail:
     """단일 CSV 파일 적재 (파싱 → 계산 → DB 저장)."""
-    result = _process_file(file_path)
-    _write_result_to_db(result, conn)
-    return _to_detail(result)
+    merged, result = _process_file(file_path)
+    inserted_count = _write_to_db(merged, result, conn)
+    return _to_detail(result, inserted_count)
 
 
 # ---------------------------------------------------------------------------
 # 배치 적재 (병렬 파싱 + 단일 DB 커밋)
 # ---------------------------------------------------------------------------
 
-def ingest_files(paths: list[str], on_progress: Callable | None = None) -> dict:
+def ingest_files(paths: list[str], on_progress: Callable | None = None) -> IngestBatchResult:
     """여러 CSV 파일을 병렬 파싱 후 한 번에 DB 적재.
-
-    Args:
-        paths: 적재할 CSV 파일 경로 목록
-        on_progress: 파일 하나 완료될 때마다 호출되는 콜백.
-                     on_progress(completed_files: int, total_files: int)
 
     처리 흐름:
       1단계: 파싱 + RPM 계산 (CPU 작업 → ProcessPoolExecutor로 병렬화)
-             파일 하나 완료될 때마다 on_progress 콜백 호출
       2단계: 계산 결과를 모아서 DB에 배치 INSERT (단일 트랜잭션, commit 1회)
       3단계: 응답 집계
     """
@@ -390,119 +530,132 @@ def ingest_files(paths: list[str], on_progress: Callable | None = None) -> dict:
             on_progress(completed, total)
 
     # 1단계: 병렬 파싱 + 계산
-    # 2개 이하일 때는 프로세스 풀 오버헤드가 더 크므로 순차 실행
-    results = []
+    processed: list[tuple[list[MergedCycle], PulseResult | VibResult]] = []
     if total <= 2:
         for i, p in enumerate(paths):
-            results.append(_process_file(p))
+            processed.append(_process_file(p))
             _notify(i + 1)
     else:
         completed = 0
         with ProcessPoolExecutor(max_workers=_MAX_WORKERS) as executor:
-            # 각 파일을 별도 프로세스에서 파싱+계산 (파일 간 의존성 없음)
             futures = {executor.submit(_process_file, p): p for p in paths}
             for future in as_completed(futures):
                 try:
-                    results.append(future.result())
+                    processed.append(future.result())
                 except Exception as e:
                     p = futures[future]
-                    results.append({
-                        "filename": Path(p).name, "db_rows": [], "skipped": 0,
-                        "errors": [str(e)], "source": p, "file_type": "UNKNOWN",
-                    })
+                    empty = PulseResult(
+                        filename=Path(p).name, source=p,
+                        cycles=[], skipped=0, errors=[str(e)])
+                    processed.append(([], empty))
                 completed += 1
                 _notify(completed)
 
     # 2단계: 배치 DB 저장 (커넥션 1회, 커밋 1회)
-    # 단일 트랜잭션으로 묶어서 commit 1회로 처리
     conn = database.get_connection()
     try:
-        for result in results:
-            _write_result_to_db(result, conn)
+        inserted_counts: list[int] = []
+        for merged, result in processed:
+            inserted_counts.append(_write_to_db(merged, result, conn))
         conn.commit()
     finally:
         conn.close()
 
     # 3단계: 응답 집계
-    total_files = len(results)
     success_cycles = 0
     skipped_cycles = 0
     failed_lines = 0
-    details = []
+    details: list[IngestDetail] = []
 
-    for result in results:
-        detail = _to_detail(result)
+    for (_, result), inserted_count in zip(processed, inserted_counts):
+        detail = _to_detail(result, inserted_count)
         details.append(detail)
         success_cycles += detail["cycles_ingested"]
         skipped_cycles += detail["cycles_skipped"]
         failed_lines += len(detail["errors"])
 
-    return {
-        "total_files": total_files,
-        "success_cycles": success_cycles,
-        "skipped_cycles": skipped_cycles,
-        "failed_lines": failed_lines,
-        "details": details,
-    }
+    return IngestBatchResult(
+        total_files=len(processed),
+        success_cycles=success_cycles,
+        skipped_cycles=skipped_cycles,
+        failed_lines=failed_lines,
+        details=details,
+    )
 
 
 # ---------------------------------------------------------------------------
 # 내부 헬퍼
 # ---------------------------------------------------------------------------
 
-def _write_result_to_db(result: dict, conn=None):
-    """파싱 결과를 DB에 저장. conn이 주어지면 커밋하지 않음 (호출자가 관리)."""
-    if result["file_type"] == "PULSE" and result["db_rows"]:
-        # 각 row를 개별 INSERT하여 cycle_id를 받고, 파형 데이터를 저장
-        inserted_count = 0
-        for row in result["db_rows"]:
-            # 원시 배열을 pop하여 DB INSERT에 포함되지 않도록 처리
-            raw_pulses = row.pop("_raw_pulses", None)
-            raw_accel_x = row.pop("_raw_accel_x", None)
-            raw_accel_y = row.pop("_raw_accel_y", None)
-            raw_accel_z = row.pop("_raw_accel_z", None)
-            vib_accel_x = row.pop("_vib_accel_x", None)
-            vib_accel_z = row.pop("_vib_accel_z", None)
+def _flatten_merged_cycle(mc: MergedCycle) -> dict:
+    """MergedCycle의 중첩 AxisStats를 flat dict로 변환하여 DB INSERT용 row 반환."""
+    row: dict = {}
+    # 스칼라 필드 복사 (raw/stats 제외)
+    for key in ("timestamp", "date", "month", "device", "device_name",
+                "cycle_index", "rpm_mean", "rpm_min", "rpm_max",
+                "mpm_mean", "mpm_min", "mpm_max", "duration_ms",
+                "set_count", "expected_count", "max_vib_x", "max_vib_z",
+                "burst_count", "peak_impact_count"):
+        row[key] = mc[key]  # type: ignore[literal-required]
+    # AxisStats → flat
+    row.update(_flatten_axis_stats("pulse_x", mc["pulse_x_stats"]))
+    row.update(_flatten_axis_stats("pulse_y", mc["pulse_y_stats"]))
+    row.update(_flatten_axis_stats("pulse_z", mc["pulse_z_stats"]))
+    row.update(_flatten_axis_stats("vib_x", mc["vib_x_stats"]))
+    row.update(_flatten_axis_stats("vib_z", mc["vib_z_stats"]))
+    return row
 
-            # cycle INSERT → id 반환
-            ids = insert_many([row], conn=conn)
+
+def _write_to_db(merged: list[MergedCycle],
+                 result: PulseResult | VibResult,
+                 conn=None) -> int:
+    """파싱 결과를 DB에 저장. conn이 주어지면 커밋하지 않음 (호출자가 관리).
+    반환: 삽입된 cycle 수."""
+    if merged:
+        inserted_count = 0
+        for mc in merged:
+            db_row = _flatten_merged_cycle(mc)
+
+            ids = insert_many([db_row], conn=conn)
             if not ids:
                 continue
             cycle_id = ids[0]
             inserted_count += 1
 
             # PULSE 파형 저장
-            if raw_pulses is not None:
-                insert_pulse_waveform(
-                    cycle_id, raw_pulses, raw_accel_x, raw_accel_y, raw_accel_z,
-                    conn=conn,
-                )
+            insert_pulse_waveform(
+                cycle_id, mc["raw_pulses"], mc["raw_accel_x"],
+                mc["raw_accel_y"], mc["raw_accel_z"], conn=conn,
+            )
 
-            # VIB 파형 저장
-            if vib_accel_x is not None:
-                insert_vib_waveform(cycle_id, vib_accel_x, vib_accel_z, conn=conn)
+            # VIB 파형 저장 (VIB 데이터가 있는 경우만)
+            if mc["vib_accel_x"]:
+                insert_vib_waveform(
+                    cycle_id, mc["vib_accel_x"], mc["vib_accel_z"], conn=conn)
 
         upsert_ingested_file(
             result["source"], result["filename"], "PULSE",
             inserted_count, result["skipped"], len(result["errors"]), conn=conn
         )
-        result["_inserted"] = inserted_count
-    elif result["file_type"] == "VIB":
-        vib_count = result.get("vib_cycle_count", 0)
+        return inserted_count
+
+    # VIB 단독 파일 처리
+    if isinstance(result, dict) and result.get("cycles"):
+        vib_count = len(result["cycles"])
         upsert_ingested_file(
             result["source"], result["filename"], "VIB",
             vib_count, 0, 0, conn=conn
         )
-        result["_inserted"] = vib_count
-    else:
-        result["_inserted"] = 0
+        return vib_count
+
+    return 0
 
 
-def _to_detail(result: dict) -> dict:
+def _to_detail(result: PulseResult | VibResult, inserted_count: int) -> IngestDetail:
     """내부 처리 결과를 API 응답용 형식으로 변환."""
-    return {
-        "filename": result["filename"],
-        "cycles_ingested": result.get("_inserted", len(result["db_rows"])),
-        "cycles_skipped": result["skipped"],
-        "errors": result["errors"],
-    }
+    return IngestDetail(
+        filename=result["filename"],
+        cycles_ingested=inserted_count,
+        cycles_skipped=result["skipped"],
+        errors=result["errors"],
+    )

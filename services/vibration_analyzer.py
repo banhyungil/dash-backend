@@ -1,10 +1,16 @@
 """진동 이벤트 분석 서비스 — burst/peak impact 구분."""
+from __future__ import annotations
+
 import math
 import numpy as np
 from config import VIB_SAMPLE_RATE
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from services.ingest_service import AxisStats
 
 
-def analyze_axis(samples: list[float], sample_rate: int = VIB_SAMPLE_RATE, threshold: float = 0.1) -> dict:
+def analyze_axis(samples: list[float], sample_rate: int = VIB_SAMPLE_RATE, threshold: float = 0.1) -> "AxisStats":
     """축별 진동 이벤트 분석.
 
     Returns:
@@ -101,7 +107,7 @@ def _classify_events(exceed_mask: np.ndarray, sample_rate: int) -> tuple[int, in
     return burst_count, peak_impact_count
 
 
-def _empty_stats() -> dict:
+def _empty_stats() -> "AxisStats":
     return {
         "rms": 0, "peak": 0, "min": 0, "max": 0,
         "q1": 0, "median": 0, "q3": 0,
