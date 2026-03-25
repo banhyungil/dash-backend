@@ -106,28 +106,41 @@ def _process_pulse_file(file_path: str, device: str | None = None,
     """PULSE CSV를 파싱하고 RPM/MPM을 계산.
     DB 쓰기는 하지 않음 — 멀티프로세싱에서 안전하게 실행 가능.
     반환: db_rows(DB에 넣을 행 목록) + 메타데이터
+
+    처리 흐름:
+      1. 설정값 로드 (shaft_dia, pattern_width, roll_diameter 등)
+      2. 파일명에서 날짜/월 추출, 경로에서 디바이스 MAC 감지
+      3. CSV 파싱 → 사이클 배열 획득
+      4. 사이클별 루프:
+         a) 펄스 간격 → RPM 변환 (에지 마스킹으로 노이즈 제거)
+         b) RPM → MPM 변환 (롤러 지름 기준)
+         c) Z축 중력 보정 (R1/R2는 센서 장착 방향에 따라 ±1g 보정)
+         d) 축별 진동 통계 계산 (rms, peak, burst 등)
+         e) DB INSERT용 dict 생성
     """
+    # --- 1) 설정값 로드 ---
     if shaft_dia is None:
         shaft_dia = float(get_setting("shaft_dia"))
     if pattern_width is None:
         pattern_width = float(get_setting("pattern_width"))
     roll_diameter = get_setting("roll_diameter")
-    device_session_map = get_setting("device_session_map")
-    gravity_offset = get_setting("gravity_offset")
+    device_session_map = get_setting("device_session_map")  # MAC → 세션명 (예: "0013A2..." → "R1")
+    gravity_offset = get_setting("gravity_offset")          # 세션별 중력 보정값
 
+    # --- 2) 파일 메타 추출 ---
     path = Path(file_path)
     source = str(path.resolve())
     filename = path.name
-    date_str = _extract_date_from_filename(filename)
+    date_str = _extract_date_from_filename(filename)  # PULSE_260311.csv → "260311"
 
     if not date_str:
         return {"filename": filename, "db_rows": [], "skipped": 0,
                 "errors": [f"파일명에서 날짜 추출 불가: {filename}"],
                 "source": source, "file_type": "PULSE"}
 
-    month = _extract_month_from_date(date_str)
+    month = _extract_month_from_date(date_str)  # "260311" → "2603"
 
-    # 경로에서 디바이스 MAC 주소 감지
+    # 파일 경로에서 디바이스 MAC 주소 감지 (경로에 MAC 폴더가 포함됨)
     if not device:
         for part in path.parts:
             if part in device_session_map:
@@ -136,9 +149,10 @@ def _process_pulse_file(file_path: str, device: str | None = None,
         if not device:
             device = "unknown"
 
-    session = device_session_map.get(device, device)
+    session = device_session_map.get(device, device)  # MAC → 세션명 (예: "R1")
 
-    # CSV 파싱 (ast.literal_eval로 각 줄 파싱)
+    # --- 3) CSV 파싱 ---
+    # 각 줄이 하나의 사이클, 사이클 안에 펄스+가속도 배열
     raw_cycles = parse_pulse_csv(path)
     if not raw_cycles:
         return {"filename": filename, "db_rows": [], "skipped": 0,
@@ -148,42 +162,46 @@ def _process_pulse_file(file_path: str, device: str | None = None,
     skipped = 0
     errors = []
 
+    # --- 4) 사이클별 처리 ---
     for i, cycle in enumerate(raw_cycles):
         try:
+            # 사이클에서 펄스/가속도 배열 추출
             data = cycle["data"]
-            pulses = [item["pulse"] for item in data]
-            accel_x = [item.get("accel_x", 0) for item in data]
+            pulses = [item["pulse"] for item in data]       # 펄스 간격 (μs)
+            accel_x = [item.get("accel_x", 0) for item in data]  # X축 가속도 (g)
             accel_y = [item.get("accel_y", 0) for item in data]
             accel_z = [item.get("accel_z", 0) for item in data]
-            set_count = len(pulses)
+            set_count = len(pulses)  # 실측 펄스 수
 
-            # 펄스 간격 → RPM 변환 + 에지 마스킹
+            # 4a) 펄스 간격 → RPM 변환 + 에지 마스킹 (패턴 경계의 노이즈 제거)
             rpm_result = process_pulse_compact_to_rpm(
                 pulses, accel_x, accel_y, accel_z, shaft_dia, pattern_width
             )
 
-            if rpm_result is None:
+            if rpm_result is None:  # 데이터 부족으로 RPM 계산 불가
                 skipped += 1
                 continue
 
             rpm_mean = rpm_result["rpmMean"]
+            # RPM 평균으로 이론적 펄스 수 계산 (참고용, DB 저장)
             expected_count = calculate_expected_pulse_count(rpm_mean, shaft_dia, pattern_width)
 
-            # RPM → MPM 변환 (롤러 지름 기준)
+            # 4b) RPM → MPM 변환: RPM × π × 롤러지름 / 1000
             mpm_mean = _calc_mpm(rpm_mean, roll_diameter)
             mpm_min = _calc_mpm(rpm_result["rpmMin"], roll_diameter)
             mpm_max = _calc_mpm(rpm_result["rpmMax"], roll_diameter)
 
-            # 중력 보정 적용
+            # 4c) Z축 중력 보정 (R1: +1g, R2: -1g → 센서 장착 방향에 의한 중력 성분 제거)
             z_off = gravity_offset.get(session, {}).get("z", 0.0)
             corrected_z = [v + z_off for v in accel_z] if z_off != 0.0 else accel_z
 
-            # PULSE 축별 진동 stats 계산
+            # 4d) PULSE 축별 진동 stats (rms, peak, q1, median, q3, burst, exceed 등)
             px_stats = analyze_axis(accel_x)
             py_stats = analyze_axis(accel_y)
             pz_stats = analyze_axis(corrected_z)
 
-            # VIB stats는 매칭 파일이 있을 때 별도 계산 (아래 _enrich_vib_stats에서)
+            # 4e) DB INSERT용 dict 조립
+            # VIB stats는 기본값 0으로 채움 → _enrich_vib_stats()에서 매칭 VIB 파일이 있으면 업데이트
             db_rows.append({
                 "timestamp": cycle["timestamp"],
                 "date": date_str,
@@ -203,14 +221,12 @@ def _process_pulse_file(file_path: str, device: str | None = None,
                 "max_vib_x": max((abs(v) for v in accel_x), default=0),
                 "max_vib_z": max((abs(v) for v in corrected_z), default=0),
                 "source_path": source,
-                # Phase 5: PULSE 진동 stats (축별 전체)
                 **_flatten_axis_stats("pulse_x", px_stats),
                 **_flatten_axis_stats("pulse_y", py_stats),
                 **_flatten_axis_stats("pulse_z", pz_stats),
                 "burst_count": px_stats["burst_count"] + py_stats["burst_count"] + pz_stats["burst_count"],
                 "peak_impact_count": px_stats["peak_impact_count"] + py_stats["peak_impact_count"] + pz_stats["peak_impact_count"],
-                # VIB stats — 기본값, _enrich_vib_stats에서 업데이트
-                **_flatten_axis_stats("vib_x", None),
+                **_flatten_axis_stats("vib_x", None),  # VIB 기본값 (0)
                 **_flatten_axis_stats("vib_z", None),
             })
         except Exception as e:
