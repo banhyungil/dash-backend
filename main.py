@@ -37,3 +37,13 @@ def root():
         "message": "Day Viewer API - Daily roll data viewer with expected filtering",
         "docs": "/docs",
     }
+
+
+# 직접 실행 시 uvicorm으로 실행
+# # 환경변수 읽어서 설정
+if __name__ == "__main__":
+    import os
+    import uvicorn
+    host = os.environ.get("HOST", "0.0.0.0")
+    port = int(os.environ.get("PORT", "8000"))
+    uvicorn.run("main:app", host=host, port=port, reload=True)

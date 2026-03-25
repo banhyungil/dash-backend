@@ -1,24 +1,41 @@
 """Shared fixtures for tests."""
-import sqlite3
+import os
+
+# 테스트 환경 강제 설정 (config.py 로드 전에 설정해야 함)
+os.environ.setdefault("APP_ENV", "test")
+
+import psycopg
+from psycopg.rows import dict_row
 import pytest
+from dotenv import load_dotenv
+
+load_dotenv(".env.test")
+
+# 테스트 DB URL (환경변수 또는 기본값)
+_TEST_DB_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:dash@localhost:5435/dash_test")
 
 
 @pytest.fixture(autouse=True)
-def _use_temp_db(tmp_path, monkeypatch):
-    """Each test gets its own fresh SQLite DB."""
-    test_db = str(tmp_path / "test.db")
+def _use_test_db(monkeypatch):
+    """Each test gets a clean PostgreSQL schema."""
+    conn = psycopg.connect(_TEST_DB_URL, row_factory=dict_row, autocommit=False)  # type: ignore[call-overload]
+
+    # 스키마 초기화 (모든 테이블 삭제 후 재생성)
+    conn.execute("DROP SCHEMA public CASCADE")
+    conn.execute("CREATE SCHEMA public")
+    conn.commit()
 
     def _get_test_connection():
-        conn = sqlite3.connect(test_db)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA foreign_keys=ON")
-        return conn
+        return psycopg.connect(_TEST_DB_URL, row_factory=dict_row, autocommit=False)  # type: ignore[call-overload]
 
     monkeypatch.setattr("services.database.get_connection", _get_test_connection)
 
     from services.database import init_db
     init_db()
+
+    yield
+
+    conn.close()
 
 
 @pytest.fixture

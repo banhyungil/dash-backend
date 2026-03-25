@@ -9,7 +9,7 @@ _STAT_FIELDS = ("rms", "peak", "min", "max", "q1", "median", "q3",
 _STAT_COLUMNS = [f"{ax}_{f}" for ax in _STAT_AXES for f in _STAT_FIELDS]
 
 _INSERT_SQL = """
-    INSERT OR REPLACE INTO t_cycle (
+    INSERT INTO t_cycle (
         timestamp, date, month, device, device_name, cycle_index,
         rpm_mean, rpm_min, rpm_max,
         mpm_mean, mpm_min, mpm_max,
@@ -19,18 +19,28 @@ _INSERT_SQL = """
         burst_count, peak_impact_count,
         source_path
     ) VALUES (
-        :timestamp, :date, :month, :device, :device_name, :cycle_index,
-        :rpm_mean, :rpm_min, :rpm_max,
-        :mpm_mean, :mpm_min, :mpm_max,
-        :duration_ms, :set_count, :expected_count,
-        :max_vib_x, :max_vib_z,
+        %(timestamp)s, %(date)s, %(month)s, %(device)s, %(device_name)s, %(cycle_index)s,
+        %(rpm_mean)s, %(rpm_min)s, %(rpm_max)s,
+        %(mpm_mean)s, %(mpm_min)s, %(mpm_max)s,
+        %(duration_ms)s, %(set_count)s, %(expected_count)s,
+        %(max_vib_x)s, %(max_vib_z)s,
         {stat_params},
-        :burst_count, :peak_impact_count,
-        :source_path
+        %(burst_count)s, %(peak_impact_count)s,
+        %(source_path)s
     )
+    ON CONFLICT (device, date, cycle_index) DO UPDATE SET
+        timestamp = EXCLUDED.timestamp,
+        device_name = EXCLUDED.device_name,
+        rpm_mean = EXCLUDED.rpm_mean, rpm_min = EXCLUDED.rpm_min, rpm_max = EXCLUDED.rpm_max,
+        mpm_mean = EXCLUDED.mpm_mean, mpm_min = EXCLUDED.mpm_min, mpm_max = EXCLUDED.mpm_max,
+        duration_ms = EXCLUDED.duration_ms, set_count = EXCLUDED.set_count,
+        expected_count = EXCLUDED.expected_count,
+        max_vib_x = EXCLUDED.max_vib_x, max_vib_z = EXCLUDED.max_vib_z,
+        burst_count = EXCLUDED.burst_count, peak_impact_count = EXCLUDED.peak_impact_count,
+        source_path = EXCLUDED.source_path
 """.format(
     stat_cols=", ".join(_STAT_COLUMNS),
-    stat_params=", ".join(f":{c}" for c in _STAT_COLUMNS),
+    stat_params=", ".join(f"%({c})s" for c in _STAT_COLUMNS),
 )
 
 
@@ -43,10 +53,13 @@ def insert_many(cycles: list[dict], conn=None) -> int:
     if own_conn:
         conn = database.get_connection()
     try:
-        cursor = conn.executemany(_INSERT_SQL, cycles)
+        count = 0
+        for cycle in cycles:
+            conn.execute(_INSERT_SQL, cycle)  # type: ignore[arg-type]
+            count += 1
         if own_conn:
             conn.commit()
-        return cursor.rowcount
+        return count
     finally:
         if own_conn:
             conn.close()
@@ -77,9 +90,9 @@ def get_dates(month: str) -> list[dict]:
         rows = conn.execute("""
             SELECT date,
                    COUNT(*) AS cycle_count,
-                   SUM(CASE WHEN max_vib_x > ? OR max_vib_z > ? THEN 1 ELSE 0 END) AS high_vib_events
+                   SUM(CASE WHEN max_vib_x > %s OR max_vib_z > %s THEN 1 ELSE 0 END) AS high_vib_events
             FROM t_cycle
-            WHERE month = ?
+            WHERE month = %s
             GROUP BY date
             ORDER BY date
         """, (threshold, threshold, month)).fetchall()
@@ -102,9 +115,9 @@ def find_by_date(month: str, date: str) -> list[dict]:
                    burst_count, peak_impact_count,
                    source_path
             FROM t_cycle
-            WHERE month = ? AND date = ?
+            WHERE month = %s AND date = %s
             ORDER BY timestamp
-        """.format(stat_cols=", ".join(_STAT_COLUMNS)), (month, date)).fetchall()
+        """.format(stat_cols=", ".join(_STAT_COLUMNS)), (month, date)).fetchall()  # type: ignore[arg-type]
         return [dict(row) for row in rows]
     finally:
         conn.close()
@@ -122,7 +135,7 @@ def find_one(date: str, device_name: str, cycle_index: int) -> dict | None:
                    max_vib_x, max_vib_z,
                    source_path
             FROM t_cycle
-            WHERE date = ? AND device_name = ? AND cycle_index = ?
+            WHERE date = %s AND device_name = %s AND cycle_index = %s
         """, (date, device_name, cycle_index)).fetchone()
         return dict(row) if row else None
     finally:
@@ -139,7 +152,7 @@ def get_monthly_summary() -> dict:
                 month,
                 COUNT(DISTINCT date) AS date_count,
                 COUNT(*) AS total_cycles,
-                SUM(CASE WHEN max_vib_x > ? OR max_vib_z > ? THEN 1 ELSE 0 END) AS high_vib_events
+                SUM(CASE WHEN max_vib_x > %s OR max_vib_z > %s THEN 1 ELSE 0 END) AS high_vib_events
             FROM t_cycle
             GROUP BY month
             ORDER BY month

@@ -143,4 +143,44 @@ conn.execute("SELECT avg(rpm_mean) FROM sqlite_scan('dash.db', 't_cycle')")
 | 실시간 수집 | 없음 (배치) | 시계열 DB 불필요 |
 | 인프라 | 단일 서버 | 임베디드 유리 |
 
-**결론**: 현재는 SQLite 유지. 데이터가 수십만 건 이상 증가하거나 CSV 직접 분석이 필요할 때 DuckDB 도입 검토.
+**결론**: PostgreSQL로 전환 완료 (2026-03). 실시간 센서 삽입 대비 + VIB 파형 BYTEA 저장.
+
+---
+
+## 환경변수 분리 패턴
+
+DB 접속 정보 등 환경에 따라 달라지는 값을 코드에서 분리하는 패턴.
+
+### 왜 분리하는가?
+
+| 이유 | 설명 |
+|------|------|
+| **보안** | DB 비밀번호, API 키를 코드에 넣지 않음. `.env`는 gitignore, 코드만 커밋 |
+| **환경별 설정** | 개발/테스트/운영 환경마다 다른 접속 정보. 코드 변경 없이 `.env`만 교체 |
+| **팀 협업** | 팀원마다 로컬 포트/비밀번호가 다를 수 있음. `.env.example`을 템플릿으로 공유 |
+| **Docker 연동** | docker-compose 포트 변경 시 `.env`만 수정. 코드 재배포 불필요 |
+
+### 파일 구조
+
+```
+.env.example   ← git 커밋 (템플릿, 실제 시크릿 없음)
+.env           ← gitignore (로컬 설정, 비밀번호 포함)
+```
+
+### 사용법 (python-dotenv)
+
+```python
+# config.py
+from dotenv import load_dotenv
+load_dotenv()  # .env 파일의 값을 os.environ에 로드
+
+DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://localhost:5432/dash")
+```
+
+```bash
+# .env
+DATABASE_URL=postgresql://postgres:dash@localhost:5435/dash
+```
+
+`load_dotenv()`는 `.env` 파일을 읽어서 `os.environ`에 주입.
+이미 환경변수가 설정되어 있으면 `.env`보다 우선함 (운영 환경에서 직접 설정 가능).
