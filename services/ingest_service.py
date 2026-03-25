@@ -124,8 +124,8 @@ def _process_pulse_file(file_path: str, device: str | None = None,
     if pattern_width is None:
         pattern_width = float(get_setting("pattern_width"))
     roll_diameter = get_setting("roll_diameter")
-    device_session_map = get_setting("device_session_map")  # MAC → 세션명 (예: "0013A2..." → "R1")
-    gravity_offset = get_setting("gravity_offset")          # 세션별 중력 보정값
+    device_name_map = get_setting("device_name_map")  # MAC → 디바이스명 (예: "0013A2..." → "R1")
+    gravity_offset = get_setting("gravity_offset")    # 디바이스명별 중력 보정값
 
     # --- 2) 파일 메타 추출 ---
     path = Path(file_path)
@@ -143,13 +143,13 @@ def _process_pulse_file(file_path: str, device: str | None = None,
     # 파일 경로에서 디바이스 MAC 주소 감지 (경로에 MAC 폴더가 포함됨)
     if not device:
         for part in path.parts:
-            if part in device_session_map:
+            if part in device_name_map:
                 device = part
                 break
         if not device:
             device = "unknown"
 
-    session = device_session_map.get(device, device)  # MAC → 세션명 (예: "R1")
+    device_name = device_name_map.get(device, device)  # MAC → 디바이스명 (예: "R1")
 
     # --- 3) CSV 파싱 ---
     # 각 줄이 하나의 사이클, 사이클 안에 펄스+가속도 배열
@@ -192,7 +192,7 @@ def _process_pulse_file(file_path: str, device: str | None = None,
             mpm_max = _calc_mpm(rpm_result["rpmMax"], roll_diameter)
 
             # 4c) Z축 중력 보정 (R1: +1g, R2: -1g → 센서 장착 방향에 의한 중력 성분 제거)
-            z_off = gravity_offset.get(session, {}).get("z", 0.0)
+            z_off = gravity_offset.get(device_name, {}).get("z", 0.0)
             corrected_z = [v + z_off for v in accel_z] if z_off != 0.0 else accel_z
 
             # 4d) PULSE 축별 진동 stats (rms, peak, q1, median, q3, burst, exceed 등)
@@ -207,7 +207,7 @@ def _process_pulse_file(file_path: str, device: str | None = None,
                 "date": date_str,
                 "month": month,
                 "device": device,
-                "session": session,
+                "device_name": device_name,
                 "cycle_index": i,
                 "rpm_mean": round(rpm_mean, 2),
                 "rpm_min": round(rpm_result["rpmMin"], 2),
@@ -283,14 +283,14 @@ def _enrich_vib_stats(pulse_result: dict):
     except Exception:
         return
 
-    # 3) 세션 확인 — 중력 보정값 조회용 (R1/R2는 Z축 -1g 보정)
-    session = None
+    # 3) 디바이스명 확인 — 중력 보정값 조회용 (R1/R2는 Z축 -1g 보정)
+    device_name = None
     for row in pulse_result.get("db_rows", []):
-        session = row.get("session")
+        device_name = row.get("device_name")
         break
 
     gravity_offset = get_setting("gravity_offset")
-    z_off = gravity_offset.get(session, {}).get("z", 0.0) if session else 0.0
+    z_off = gravity_offset.get(device_name, {}).get("z", 0.0) if device_name else 0.0
 
     # 4) PULSE의 각 사이클(db_row)에 대해 동일 인덱스의 VIB 사이클을 매칭
     #    PULSE cycle_index 0 ↔ VIB cycle_index 0 (동일 시점 데이터)

@@ -20,7 +20,7 @@ CREATE TABLE t_cycle (
     date            TEXT NOT NULL,
     month           TEXT NOT NULL,
     device          TEXT NOT NULL,
-    session         TEXT NOT NULL,
+    device_name     TEXT NOT NULL,
     cycle_index     INTEGER NOT NULL,
 
     -- RPM/MPM aggregates
@@ -48,6 +48,6 @@ CREATE TABLE t_cycle (
 
 CREATE INDEX idx_t_cycle_date ON t_cycle(date);
 CREATE INDEX idx_t_cycle_month ON t_cycle(month);
-CREATE INDEX idx_t_cycle_session ON t_cycle(session);
+CREATE INDEX idx_t_cycle_device_name ON t_cycle(device_name);
 CREATE INDEX idx_t_cycle_timestamp ON t_cycle(timestamp);
 CREATE INDEX idx_t_cycle_source ON t_cycle(source_path);

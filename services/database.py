@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS t_cycle (
     date            TEXT NOT NULL,
     month           TEXT NOT NULL,
     device          TEXT NOT NULL,
-    session         TEXT NOT NULL,
+    device_name     TEXT NOT NULL,
     cycle_index     INTEGER NOT NULL,
 
     -- RPM/MPM aggregates
@@ -110,7 +110,7 @@ CREATE TABLE IF NOT EXISTS t_cycle (
 
 CREATE INDEX IF NOT EXISTS idx_t_cycle_date ON t_cycle(date);
 CREATE INDEX IF NOT EXISTS idx_t_cycle_month ON t_cycle(month);
-CREATE INDEX IF NOT EXISTS idx_t_cycle_session ON t_cycle(session);
+CREATE INDEX IF NOT EXISTS idx_t_cycle_device_name ON t_cycle(device_name);
 CREATE INDEX IF NOT EXISTS idx_t_cycle_timestamp ON t_cycle(timestamp);
 CREATE INDEX IF NOT EXISTS idx_t_cycle_source ON t_cycle(source_path);
 
@@ -141,7 +141,7 @@ _DEFAULT_SETTINGS = [
     ("target_rpm", "100", "number", "목표 RPM", "equipment"),
     ("roll_diameter", "140", "number", "롤러 지름 (mm)", "equipment"),
     ("expected_tolerance", "0.1", "number", "유효 판정 허용 오차", "validation"),
-    ("device_session_map", '{"0013A20041F71B01":"R1","0013A20041F9D466":"R2","0013A20041F98275":"R3","0013A20041F9D4F8":"R4"}', "json", "디바이스→세션 매핑", "device"),
+    ("device_name_map", '{"0013A20041F71B01":"R1","0013A20041F9D466":"R2","0013A20041F98275":"R3","0013A20041F9D4F8":"R4"}', "json", "디바이스→이름 매핑", "device"),
     ("gravity_offset", '{"R1":{"z":-1.0},"R2":{"z":-1.0},"R3":{"z":0.0},"R4":{"z":0.0}}', "json", "중력 보정값", "device"),
     ("rpm_error_bands", '[{"val":10,"label":"stage01","color":"#DDCC00"},{"val":20,"label":"stage02","color":"#FF5E00"},{"val":30,"label":"stage03","color":"#FF0000"}]', "json", "RPM 허용 밴드", "validation"),
     ("vib_threshold", "0.3", "number", "고진동 임계값(g)", "vibration"),

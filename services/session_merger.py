@@ -1,19 +1,19 @@
-"""Merge multiple sessions (r1~r4) into a single timeline by timestamp."""
+"""Merge multiple device names (r1~r4) into a single timeline by timestamp."""
 from typing import List, Dict, Any
 
 
 def merge_sessions_by_timestamp(sessions_data: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
-    Merge multiple sessions (r1, r2, r3, r4) into a single continuous timeline.
+    Merge multiple device names (r1, r2, r3, r4) into a single continuous timeline.
 
-    Each session contains cycles with timestamps. This function:
-    1. Collects all cycles from all sessions
+    Each entry contains cycles with timestamps. This function:
+    1. Collects all cycles from all device names
     2. Sorts by timestamp
     3. Returns merged data with continuous timeline
 
     Args:
-        sessions_data: List of session data, each containing:
-            - session: session name (r1, r2, r3, r4)
+        sessions_data: List of device data, each containing:
+            - device_name: device name (r1, r2, r3, r4)
             - cycles: list of cycle data
 
     Returns:
@@ -21,15 +21,15 @@ def merge_sessions_by_timestamp(sessions_data: List[Dict[str, Any]]) -> Dict[str
     """
     all_cycles = []
 
-    # Collect all cycles from all sessions
+    # Collect all cycles from all device names
     for session_data in sessions_data:
-        session_name = session_data.get("session", "")
+        device_name = session_data.get("device_name", "")
         cycles = session_data.get("cycles", [])
 
         for cycle in cycles:
-            # Add session info to each cycle ONLY if it doesn't already have one
-            if "session" not in cycle or not cycle["session"]:
-                cycle["session"] = session_name
+            # Add device_name info to each cycle ONLY if it doesn't already have one
+            if "device_name" not in cycle or not cycle["device_name"]:
+                cycle["device_name"] = device_name
             all_cycles.append(cycle)
 
     # Sort by timestamp

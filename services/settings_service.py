@@ -8,7 +8,7 @@ _FALLBACK: dict[str, Any] = {
     "roll_diameter": 140,
     "expected_tolerance": 0.1,
     "vib_threshold": 0.3,
-    "device_session_map": {
+    "device_name_map": {
         "0013A20041F71B01": "R1",
         "0013A20041F9D466": "R2",
         "0013A20041F98275": "R3",

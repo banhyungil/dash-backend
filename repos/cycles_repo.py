@@ -10,7 +10,7 @@ _STAT_COLUMNS = [f"{ax}_{f}" for ax in _STAT_AXES for f in _STAT_FIELDS]
 
 _INSERT_SQL = """
     INSERT OR REPLACE INTO t_cycle (
-        timestamp, date, month, device, session, cycle_index,
+        timestamp, date, month, device, device_name, cycle_index,
         rpm_mean, rpm_min, rpm_max,
         mpm_mean, mpm_min, mpm_max,
         duration_ms, set_count, expected_count,
@@ -19,7 +19,7 @@ _INSERT_SQL = """
         burst_count, peak_impact_count,
         source_path
     ) VALUES (
-        :timestamp, :date, :month, :device, :session, :cycle_index,
+        :timestamp, :date, :month, :device, :device_name, :cycle_index,
         :rpm_mean, :rpm_min, :rpm_max,
         :mpm_mean, :mpm_min, :mpm_max,
         :duration_ms, :set_count, :expected_count,
@@ -93,7 +93,7 @@ def find_by_date(month: str, date: str) -> list[dict]:
     conn = database.get_connection()
     try:
         rows = conn.execute("""
-            SELECT timestamp, date, month, device, session, cycle_index,
+            SELECT timestamp, date, month, device, device_name, cycle_index,
                    rpm_mean, rpm_min, rpm_max,
                    mpm_mean, mpm_min, mpm_max,
                    duration_ms, set_count, expected_count,
@@ -110,20 +110,20 @@ def find_by_date(month: str, date: str) -> list[dict]:
         conn.close()
 
 
-def find_one(date: str, session: str, cycle_index: int) -> dict | None:
+def find_one(date: str, device_name: str, cycle_index: int) -> dict | None:
     """특정 사이클 1건 조회."""
     conn = database.get_connection()
     try:
         row = conn.execute("""
-            SELECT timestamp, date, month, device, session, cycle_index,
+            SELECT timestamp, date, month, device, device_name, cycle_index,
                    rpm_mean, rpm_min, rpm_max,
                    mpm_mean, mpm_min, mpm_max,
                    duration_ms, set_count, expected_count,
                    max_vib_x, max_vib_z,
                    source_path
             FROM t_cycle
-            WHERE date = ? AND session = ? AND cycle_index = ?
-        """, (date, session, cycle_index)).fetchone()
+            WHERE date = ? AND device_name = ? AND cycle_index = ?
+        """, (date, device_name, cycle_index)).fetchone()
         return dict(row) if row else None
     finally:
         conn.close()

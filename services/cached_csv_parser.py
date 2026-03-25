@@ -13,20 +13,20 @@ from services.cache_manager import read_parsed_cache, write_parsed_cache
 
 
 def _extract_cache_key(file_path: Path) -> tuple[str, str, str, str] | None:
-    """Extract (month, device, session, csv_stem) from a CSV file path.
-    Expected path: .../Measured_{YYMM}/Measured/{session}/measure/{device}/PULSE_{date}.csv
+    """Extract (month, device, device_name, csv_stem) from a CSV file path.
+    Expected path: .../Measured_{YYMM}/Measured/{device_name}/measure/{device}/PULSE_{date}.csv
     """
     parts = file_path.parts
     # Find "Measured_YYMM" part
     for i, part in enumerate(parts):
         if part.startswith("Measured_") and len(part) == 13:  # Measured_YYMM
             month = part.replace("Measured_", "")
-            # Expected: parts[i+1]="Measured", parts[i+2]=session, parts[i+3]="measure", parts[i+4]=device
+            # Expected: parts[i+1]="Measured", parts[i+2]=device_name, parts[i+3]="measure", parts[i+4]=device
             if i + 4 < len(parts):
-                session = parts[i + 2]
+                device_name = parts[i + 2]
                 device = parts[i + 4]
                 csv_stem = file_path.stem  # e.g. PULSE_260101
-                return month, device, session, csv_stem
+                return month, device, device_name, csv_stem
     return None
 
 

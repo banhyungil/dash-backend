@@ -1,9 +1,9 @@
 """Cache manager: read/write/validate msgpack-based caches.
 
 Cache structure:
-  .cache/parsed/{month}/{device}/{session}/PULSE_{date}.msgpack
-  .cache/parsed/{month}/{device}/{session}/VIB_{date}.msgpack
-  .cache/derived/{month}/{device}/{session}/VIB_{date}_c{cycle}.msgpack
+  .cache/parsed/{month}/{device}/{device_name}/PULSE_{date}.msgpack
+  .cache/parsed/{month}/{device}/{device_name}/VIB_{date}.msgpack
+  .cache/derived/{month}/{device}/{device_name}/VIB_{date}_c{cycle}.msgpack
   .cache/manifest.msgpack
 """
 
@@ -49,16 +49,16 @@ def _is_valid(cached_meta: dict, source_path: Path) -> bool:
 # Paths
 # ---------------------------------------------------------------------------
 
-def _parsed_cache_path(month: str, device: str, session: str, filename: str) -> Path:
+def _parsed_cache_path(month: str, device: str, device_name: str, filename: str) -> Path:
     """Return cache path for a parsed CSV file.
     filename: e.g. 'PULSE_260101' or 'VIB_260101' (no extension).
     """
-    return CACHE_DIR / "parsed" / month / device / session / f"{filename}.msgpack"
+    return CACHE_DIR / "parsed" / month / device / device_name / f"{filename}.msgpack"
 
 
-def _derived_cache_path(month: str, device: str, session: str, date: str, cycle_index: int) -> Path:
+def _derived_cache_path(month: str, device: str, device_name: str, date: str, cycle_index: int) -> Path:
     """Return cache path for derived VIB analysis (FFT/spectrogram/RMS)."""
-    return CACHE_DIR / "derived" / month / device / session / f"VIB_{date}_c{cycle_index}.msgpack"
+    return CACHE_DIR / "derived" / month / device / device_name / f"VIB_{date}_c{cycle_index}.msgpack"
 
 
 def _manifest_path() -> Path:
@@ -100,15 +100,15 @@ def read_cache(cache_path: Path, source_path: Path) -> dict | None:
 # Parsed CSV cache
 # ---------------------------------------------------------------------------
 
-def read_parsed_cache(month: str, device: str, session: str, csv_stem: str, source_path: Path) -> dict | None:
+def read_parsed_cache(month: str, device: str, device_name: str, csv_stem: str, source_path: Path) -> dict | None:
     """Read parsed CSV cache. csv_stem e.g. 'PULSE_260101'."""
-    cp = _parsed_cache_path(month, device, session, csv_stem)
+    cp = _parsed_cache_path(month, device, device_name, csv_stem)
     return read_cache(cp, source_path)
 
 
-def write_parsed_cache(month: str, device: str, session: str, csv_stem: str, source_path: Path, data: dict) -> None:
+def write_parsed_cache(month: str, device: str, device_name: str, csv_stem: str, source_path: Path, data: dict) -> None:
     """Write parsed CSV cache."""
-    cp = _parsed_cache_path(month, device, session, csv_stem)
+    cp = _parsed_cache_path(month, device, device_name, csv_stem)
     write_cache(cp, data, source_path)
 
 
@@ -116,13 +116,13 @@ def write_parsed_cache(month: str, device: str, session: str, csv_stem: str, sou
 # Derived VIB cache (FFT/spectrogram per cycle)
 # ---------------------------------------------------------------------------
 
-def read_derived_cache(month: str, device: str, session: str, date: str, cycle_index: int, source_path: Path) -> dict | None:
-    cp = _derived_cache_path(month, device, session, date, cycle_index)
+def read_derived_cache(month: str, device: str, device_name: str, date: str, cycle_index: int, source_path: Path) -> dict | None:
+    cp = _derived_cache_path(month, device, device_name, date, cycle_index)
     return read_cache(cp, source_path)
 
 
-def write_derived_cache(month: str, device: str, session: str, date: str, cycle_index: int, source_path: Path, data: dict) -> None:
-    cp = _derived_cache_path(month, device, session, date, cycle_index)
+def write_derived_cache(month: str, device: str, device_name: str, date: str, cycle_index: int, source_path: Path, data: dict) -> None:
+    cp = _derived_cache_path(month, device, device_name, date, cycle_index)
     write_cache(cp, data, source_path)
 
 

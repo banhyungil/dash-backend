@@ -71,9 +71,9 @@ def _create_timeline_sheet(wb: Workbook, name: str, cycles: list[dict], date_dis
     for cy in cycles:
         ts = datetime.fromisoformat(cy["timestamp"])
         key = f"{ts.hour:02d}:{ts.minute:02d}"
-        session = cy.get("session", "")
-        if session in time_grouped[key]:
-            time_grouped[key][session].append(round(cy["mpm_mean"]))
+        device_name = cy.get("device_name", "")
+        if device_name in time_grouped[key]:
+            time_grouped[key][device_name].append(round(cy["mpm_mean"]))
 
     sorted_keys = sorted(time_grouped.keys())
     if not sorted_keys:
@@ -180,7 +180,7 @@ def _create_vib_sheet(wb: Workbook, name: str, cycles: list[dict], node: str):
         c.fill = _FILL_VIB_HEADER
         c.alignment = _ALIGN_CENTER
 
-    node_cycles = [c for c in cycles if c.get("session") == node]
+    node_cycles = [c for c in cycles if c.get("device_name") == node]
     rpm_stats: dict[int, list[float]] = defaultdict(list)
 
     row = 3

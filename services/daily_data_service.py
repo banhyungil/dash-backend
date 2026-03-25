@@ -67,9 +67,9 @@ def build_daily_data(month: str, date: str) -> dict:
     }
 
 
-def build_cycle_detail(date: str, session: str, cycle_index: int) -> dict | None:
+def build_cycle_detail(date: str, device_name: str, cycle_index: int) -> dict | None:
     """개별 사이클의 원시 파형 데이터 반환."""
-    cycle = find_one(date, session, cycle_index)
+    cycle = find_one(date, device_name, cycle_index)
     if not cycle:
         return None
 
@@ -79,7 +79,7 @@ def build_cycle_detail(date: str, session: str, cycle_index: int) -> dict | None
     source_path = cycle.get("source_path", "")
     result = {
         "date": date,
-        "session": session,
+        "device_name": device_name,
         "cycle_index": cycle_index,
         "timestamp": cycle["timestamp"],
         "rpm_mean": cycle["rpm_mean"],
@@ -188,9 +188,9 @@ def _load_vib_arrays(cycles: list[dict]):
 
 
 def _apply_gravity_correction(cycles: list[dict], gravity_offset: dict):
-    """세션별 Z축 중력 보정."""
+    """디바이스명별 Z축 중력 보정."""
     for cycle in cycles:
-        z_off = gravity_offset.get(cycle.get("session", ""), {}).get("z", 0.0)
+        z_off = gravity_offset.get(cycle.get("device_name", ""), {}).get("z", 0.0)
         if z_off != 0.0:
             if cycle.get("pulse_accel_z"):
                 cycle["pulse_accel_z"] = [v + z_off for v in cycle["pulse_accel_z"]]

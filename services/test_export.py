@@ -40,16 +40,16 @@ def copy_raw_csv_files(month: str, date: str, devices: List[str], source_data_di
             pulse_file = device_folder / f"PULSE_{date}.csv"
             vib_file = device_folder / f"VIB_{date}.csv"
 
-            # Get session name from device mapping (R1, R2, R3, R4)
-            session_name = get_setting("device_session_map").get(device, device)
+            # Get device name from device mapping (R1, R2, R3, R4)
+            device_name = get_setting("device_name_map").get(device, device)
 
             if pulse_file.exists():
-                dest_file = dest_dir / f"{session_name}_PULSE_{date}.csv"
+                dest_file = dest_dir / f"{device_name}_PULSE_{date}.csv"
                 shutil.copy2(pulse_file, dest_file)
                 copied_files.append(str(dest_file))
 
             if vib_file.exists():
-                dest_file = dest_dir / f"{session_name}_VIB_{date}.csv"
+                dest_file = dest_dir / f"{device_name}_VIB_{date}.csv"
                 shutil.copy2(vib_file, dest_file)
                 copied_files.append(str(dest_file))
 
@@ -84,7 +84,7 @@ def create_integrated_csv_raw(
     # Collect all raw data from all devices
     for device in devices:
         csv_files = get_csv_files(month, date, device)
-        session_name = get_setting("device_session_map").get(device, device)
+        device_name = get_setting("device_name_map").get(device, device)
 
         # Parse PULSE files
         for pulse_info in csv_files["pulse"]:
@@ -95,7 +95,7 @@ def create_integrated_csv_raw(
                 all_pulse_cycles.append({
                     "timestamp": parsed["timestamps"][i],
                     "device": device,
-                    "session": session_name,
+                    "device_name": device_name,
                     "cycle_index": i,
                     "pulses": cycle["pulses"],
                     "accel_x": cycle["accel_x"],
@@ -112,7 +112,7 @@ def create_integrated_csv_raw(
                 all_vib_cycles.append({
                     "timestamp": parsed_vib["timestamps"][i],
                     "device": device,
-                    "session": session_name,
+                    "device_name": device_name,
                     "cycle_index": i,
                     "accel_x": cycle["accel_x"],
                     "accel_z": cycle["accel_z"],
@@ -134,7 +134,7 @@ def create_integrated_csv_raw(
         writer.writerow([
             'timestamp',
             'device',
-            'session',
+            'device_name',
             'cycle_index',
             'pulse_count',
         ])
@@ -144,7 +144,7 @@ def create_integrated_csv_raw(
             writer.writerow([
                 cycle['timestamp'],
                 cycle['device'],
-                cycle['session'],
+                cycle['device_name'],
                 cycle['cycle_index'],
                 len(cycle['pulses']),
             ])
@@ -162,7 +162,7 @@ def create_integrated_csv_raw(
         merged_cycles.append({
             'timestamp': cycle['timestamp'],
             'device': cycle['device'],
-            'session': cycle['session'],
+            'device_name': cycle['device_name'],
             'cycle_index': cycle['cycle_index'],
             'type': 'PULSE',
             'pulse_accel_x_count': len(cycle['accel_x']),
@@ -176,7 +176,7 @@ def create_integrated_csv_raw(
         merged_cycles.append({
             'timestamp': cycle['timestamp'],
             'device': cycle['device'],
-            'session': cycle['session'],
+            'device_name': cycle['device_name'],
             'cycle_index': cycle['cycle_index'],
             'type': 'VIB',
             'pulse_accel_x_count': '',
@@ -195,7 +195,7 @@ def create_integrated_csv_raw(
         writer.writerow([
             'timestamp',
             'device',
-            'session',
+            'device_name',
             'cycle_index',
             'pulse_accel_x_count',
             'pulse_accel_z_count',
@@ -208,7 +208,7 @@ def create_integrated_csv_raw(
             writer.writerow([
                 cycle['timestamp'],
                 cycle['device'],
-                cycle['session'],
+                cycle['device_name'],
                 cycle['cycle_index'],
                 cycle['pulse_accel_x_count'],
                 cycle['pulse_accel_z_count'],

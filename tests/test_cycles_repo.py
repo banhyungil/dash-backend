@@ -10,7 +10,7 @@ def _make_cycle(**overrides):
         "date": "260311",
         "month": "2603",
         "device": "0013A20041F9D4F8",
-        "session": "R4",
+        "device_name": "R4",
         "cycle_index": 0,
         "rpm_mean": 95.42,
         "rpm_min": 92.15,
@@ -133,12 +133,12 @@ class TestCycleDataIntegrity:
         rows = find_by_date("2603", "260311")
         assert rows[0]["duration_ms"] == 0
 
-    def test_multiple_sessions_duration(self):
-        """여러 세션의 duration_ms 합산 확인."""
+    def test_multiple_device_names_duration(self):
+        """여러 디바이스명의 duration_ms 합산 확인."""
         cycles = [
-            _make_cycle(session="R1", cycle_index=0, duration_ms=5000.0, device="D1"),
-            _make_cycle(session="R2", cycle_index=0, duration_ms=4500.0, device="D2"),
-            _make_cycle(session="R3", cycle_index=0, duration_ms=4800.0, device="D3"),
+            _make_cycle(device_name="R1", cycle_index=0, duration_ms=5000.0, device="D1"),
+            _make_cycle(device_name="R2", cycle_index=0, duration_ms=4500.0, device="D2"),
+            _make_cycle(device_name="R3", cycle_index=0, duration_ms=4800.0, device="D3"),
         ]
         insert_many(cycles)
 

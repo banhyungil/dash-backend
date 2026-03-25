@@ -56,11 +56,11 @@ def export_excel(month: str = Query(...), date: str = Query(...)):
 @router.get("/cycles/detail")
 def get_cycle_detail(
     date: str = Query(...),
-    session: str = Query(...),
+    device_name: str = Query(...),
     cycle_index: int = Query(...),
 ):
     """개별 사이클의 원시 파형 데이터 반환."""
-    result = build_cycle_detail(date, session, cycle_index)
+    result = build_cycle_detail(date, device_name, cycle_index)
     if not result:
         return {"error": "cycle not found"}
     return result
