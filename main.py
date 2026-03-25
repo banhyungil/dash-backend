@@ -5,12 +5,21 @@ from fastapi.middleware.cors import CORSMiddleware
 from routers.cycles import router as cycles_router
 from routers.ingest import router as ingest_router
 from routers.settings import router as settings_router
-from services.database import init_db
+from services.database import seed_settings
+
+
+def _run_migrations():
+    """Alembic 마이그레이션을 최신까지 자동 적용."""
+    from alembic.config import Config
+    from alembic import command
+    alembic_cfg = Config("alembic.ini")
+    command.upgrade(alembic_cfg, "head")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    init_db()
+    _run_migrations()
+    seed_settings()
     yield
 
 

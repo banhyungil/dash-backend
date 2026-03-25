@@ -1,47 +1,57 @@
-# FastAPI Server - Architecture
+# Dash Backend - Architecture
 
 ## 프로젝트 개요
 
-FastAPI 기반 이미지 처리 서버. OpenCV로 이미지 처리 후 결과를 반환하거나 PostgreSQL에 저장한다.
+롤러 설비의 센서 데이터(펄스, 진동)를 적재·분석·시각화하는 대시보드 백엔드.
 
 ## 기술 스택
 
-- **런타임**: Python 3.10+
-- **프레임워크**: FastAPI 0.133.0
-- **이미지 처리**: OpenCV 4.13.0 (headless)
-- **DB 드라이버**: psycopg3 (binary) — raw SQL, ORM 없음
-- **DB**: PostgreSQL (localhost:5434)
-- **패키지 관리**: pip (`requirements.txt`)
-- **가상환경**: `.venv/`
+- **런타임**: Python 3.12+
+- **프레임워크**: FastAPI
+- **DB**: PostgreSQL 17 (Docker)
+- **DB 드라이버**: psycopg3 — raw SQL, ORM 없음
+- **마이그레이션**: Alembic (raw SQL)
+- **환경 설정**: python-dotenv (`.env`)
 
 ---
 
 ## 프로젝트 구조
 
 ```
-fastapi-server/
-├── app/
-│   ├── main.py                              # FastAPI 앱 진입점
-│   ├── api/
-│   │   ├── router.py                        # 라우터 집합
-│   │   └── endpoints/                       # 엔드포인트 집합
-│   ├── core/
-│   │   ├── config.py                        # Settings (BaseSettings, .env 로드)
-│   │   ├── exception_handlers.py            # 전역 예외 핸들러
-│   │   └── logging.py                       # 로깅 설정
-│   ├── services/                            # 서비스 집합
-│   ├── repos/                               # Repository 집합
-│   ├── schemas/                             # 스키마 집합
-│   └── utils/                               # Util 집합
-├── uploads/                                 # 저장 파일 집합, static 서빙
+dash-backend/
+├── main.py                  # FastAPI 앱 진입점
+├── config.py                # 환경변수 로드, 상수 정의
+├── routers/
+│   ├── cycles.py            # 사이클 데이터 조회 API
+│   ├── ingest.py            # CSV 적재 API
+│   └── settings.py          # 설정 CRUD API
+├── services/
+│   ├── ingest_service.py    # CSV 파싱 → DB 적재 오케스트레이션
+│   ├── csv_parser.py        # PULSE/VIB CSV 파싱
+│   ├── rpm_service.py       # 펄스 → RPM/MPM 변환
+│   ├── daily_data_service.py # 일별 사이클 데이터 조회
+│   ├── expected_filter.py   # 이론 펄스 수 계산
+│   ├── signal_service.py    # 진동 신호 통계 (RMS, peak 등)
+│   ├── vibration_analyzer.py # 진동 분석 (burst, impact)
+│   ├── session_merger.py    # 다중 세션 데이터 병합
+│   ├── excel_export.py      # Excel 내보내기
+│   ├── settings_service.py  # DB 설정 관리
+│   └── database.py          # DB 연결, 스키마 초기화
+├── repos/
+│   ├── cycles_repo.py       # t_cycle CRUD
+│   ├── pulse_waveform_repo.py # t_pulse_waveform CRUD
+│   ├── vib_waveform_repo.py # t_vib_waveform CRUD
+│   ├── ingested_files_repo.py # h_ingested_file CRUD
+│   └── settings_repo.py     # t_settings CRUD
+├── alembic/                 # DB 마이그레이션
+├── tests/                   # pytest 테스트
 ├── docs/
-│   ├── architecture.md                      # 이 문서
-│   ├── ddl.md                               # DB 스키마 정의
-│   ├── todo                                 # 구현 과제 문서 집합
-│   └── note/                                # 개발 노트, 개인 학습용
-├── requirements.txt
-├── .env.example
-└── CLAUDE.md
+│   ├── architecture.md      # 이 문서
+│   ├── plans/               # 구현 계획
+│   └── note/                # 학습 노트
+├── docker-compose.yml       # PostgreSQL 컨테이너
+├── .env                     # 로컬 환경변수 (gitignore)
+└── .env.example             # 환경변수 템플릿
 ```
 
 ---
@@ -51,11 +61,11 @@ fastapi-server/
 ```
 Client HTTP Request
     ↓
-main.py (CORS, 라우터, 정적파일 마운트, 예외 핸들러)
+main.py (CORS, 라우터 마운트)
     ↓
-endpoints/ (HTTP 입출력, 요청 검증, 응답 포매팅)
+routers/ (HTTP 파라미터 파싱, 응답 포매팅)
     ↓
-services/ (비즈니스 로직, 오케스트레이션)
+services/ (비즈니스 로직, CSV 파싱, 계산)
     ↓
 repos/ (raw SQL, 데이터 접근)
     ↓
@@ -64,137 +74,58 @@ PostgreSQL
 
 ### 레이어 역할
 
-| 레이어 | 역할 | 예시 |
-|--------|------|------|
-| **endpoints** | HTTP 파라미터 파싱, 응답 코드 결정 | `file` 업로드 수신 → service 호출 → StreamingResponse |
-| **services** | 비즈니스 로직 수행 | OpenCV 필터 적용, 배치 처리 체이닝 |
-| **repos** | SQL 실행, DB 행 ↔ dict 변환 | `INSERT INTO t_file ...`, 커서 페이지네이션 |
-| **schemas** | 요청/응답 데이터 검증 + 직렬화 | Pydantic 모델, CamelModel |
+| 레이어 | 역할 |
+|--------|------|
+| **routers** | HTTP 입출력, 요청 검증, 응답 코드 결정 |
+| **services** | 비즈니스 로직 (파싱, RPM 계산, 통계, 내보내기) |
+| **repos** | SQL 실행, DB 행 ↔ dict 변환 |
 
 ---
 
-## main.py 설정
+## DB 테이블
 
-- **CORS**: 와일드카드 origins, `X-Process-Time-Ms` 헤더 노출
-- **라우터**: `/api` 프리픽스로 image_processing, preset, process 라우터 포함
-- **정적파일**: `/uploads` → `uploads/` 디렉토리 마운트
-- **커스텀 OpenAPI**: 필터 파라미터 모델을 Swagger 스키마에 동적 등록 (중복 방지)
+| 테이블 | 용도 |
+|--------|------|
+| `t_cycle` | 사이클별 집계 데이터 (RPM, 진동 통계 등) |
+| `t_pulse_waveform` | 펄스 원시 파형 (BYTEA) |
+| `t_vib_waveform` | 진동 원시 파형 (BYTEA) |
+| `h_ingested_file` | 적재 이력 (중복 방지) |
+| `t_settings` | 런타임 설정 (shaft_dia, vib_threshold 등) |
+
+---
+
+## 설정 계층
+
+| 분류 | 위치 | 예시 |
+|------|------|------|
+| 인프라/환경 | `config.py` + `.env` | DATABASE_URL, PORT |
+| 센서 스펙 (불변) | `config.py` 상수 | VIB_SAMPLE_RATE, RPM_READ_OFFSET |
+| 비즈니스 (변경 가능) | `t_settings` (DB) | shaft_dia, vib_threshold |
 
 ---
 
 ## API 엔드포인트
 
-- 요청/응답은 스키마를 통해 명세화한다.
-- 스키마 및 모델은 schemas 하위에서 관리한다.
-
-
-### 프로세스 (`/api/processes`)
+### 사이클 (`/api/cycles`)
 
 | Method | Path | 설명 |
 |--------|------|------|
-| GET | `/` | 프로세스 목록 (선택: `?fileId=` 필터) |
-| GET | `/{process_id}` | 프로세스 상세 조회 |
-| POST | `/` | 프로세스 생성 (201) |
-| PUT | `/{process_id}` | 프로세스 수정 |
-| DELETE | `/{process_id}` | 프로세스 삭제 (204) |
+| GET | `/months` | 적재된 월 목록 |
+| GET | `/dates` | 월별 일자 목록 + 사이클 수 |
+| GET | `/daily` | 일별 사이클 상세 데이터 |
+| GET | `/monthly-summary` | 월별 적재 현황 요약 |
+| GET | `/export/excel` | Excel 내보내기 |
 
----
+### 적재 (`/api/ingest`)
 
-## 데이터베이스 (상세 DDL은 `ddl.md` 참고)
+| Method | Path | 설명 |
+|--------|------|------|
+| POST | `/scan` | 폴더 스캔 → 적재 대상 CSV 목록 |
+| POST | `/files` | CSV 파일 배치 적재 |
 
-### 테이블 관계
+### 설정 (`/api/settings`)
 
-```
-t_file
-  ↑ file_id          ↑ final_file_id
-  │                   │
-t_image_process ←─── t_process_step (parent_id → self, preset_id → t_preset)
-
-t_preset ←────────── t_preset_step (parent_id → self)
-```
-
-### 주요 테이블
-
-| 테이블 | 역할 |
-|--------|------|
-| `t_file` | 물리 파일 메타데이터 (원본명, 서버명, 경로, MIME, 크기) |
-| `t_preset` | 재사용 가능한 알고리즘 조합 템플릿 |
-| `t_preset_step` | 프리셋의 알고리즘 노드 트리 (parent_id 기반) |
-| `t_image_process` | 이미지 편집 세션 (원본 → 최종 결과 연결) |
-| `t_process_step` | 실제 적용된 알고리즘 노드 트리 + 실행 이력 |
-
-### 트리 구조
-
-`t_preset_step`과 `t_process_step`은 `parent_id`로 트리 구조를 형성한다:
-
-```
-노드A (parent_id: null) → 루트
-├── 노드B (parent_id: A)
-│   ├── 노드D (parent_id: B)
-│   └── 노드E (parent_id: B)
-└── 노드C (parent_id: A)     → A와 같은 입력에 다른 알고리즘 (분기/비교)
-    └── 노드F (parent_id: C)
-```
-
-- `parent_id = NULL`: 루트 노드 (시작점)
-- 같은 parent의 siblings: 분기 (동일 입력에 서로 다른 알고리즘 적용 → 비교)
-- `t_preset_step`: 순수 트리 (설계도)
-- `t_process_step`: 트리 + `is_enabled`, `execution_ms` (실행 기록)
-
-### 커서 페이지네이션
-
-`t_file` 목록 조회 시 `(uploaded_at DESC, id DESC)` 복합키 기준.
-
----
-
-## 이미지 처리 (image_processing_service.py)
-
-### 지원 필터 (35+)
-
-| 카테고리 | 필터 |
-|----------|------|
-| **엣지 검출** | sobel, prewitt, laplacian, canny, roberts |
-| **블러링** | gaussian, blur, gaussianBlur, medianBlur, bilateralFilter, boxFilter |
-| **컨투어** | findContour, convexHull, boundingBox |
-| **밝기** | plus, minus, gamma, histogramEqualization |
-| **임계값** | binary, inverse, tozero, tozeroInverse, truncate, otsu, adaptive |
-| **형태학** | erosion, dilation, opening, closing |
-
-### 파라미터 모델
-
-각 필터별 전용 Pydantic 모델이 `schemas/image_processing.py`에 정의되어 있으며, `PARAM_MODELS` dict로 PrcType과 매핑된다.
-
-### 배치 처리 흐름
-
-```python
-# steps: [{ prcType, parameters }, ...]
-image = decode(image_bytes)
-for step in steps:
-    image = OPERATIONS[step.prcType](image, params)
-    step.execution_ms = measured_time
-return encode(image), steps, total_ms
-```
-
----
-
-## 스키마 설계
-
-### CamelModel
-
-모든 응답 모델의 베이스 클래스. `snake_case` Python 필드를 `camelCase` JSON으로 자동 변환.
-
-```python
-class CamelModel(BaseModel):
-    model_config = ConfigDict(
-        alias_generator=to_camel,
-        populate_by_name=True,
-    )
-```
-
-### PrcType
-
-35+ 필터 타입의 Literal union. 요청 검증과 라우팅에 사용.
-
----
-
-
+| Method | Path | 설명 |
+|--------|------|------|
+| GET | `/` | 전체 설정 조회 |
+| PUT | `/{key}` | 설정값 변경 |

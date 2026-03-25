@@ -85,3 +85,53 @@ class TestIngestFiles:
         ingest_file(str(csv))
         status = get_monthly_summary()
         assert status["total_cycles"] >= 0
+
+    def test_ingest_batch_many_files(self, tmp_path, sample_pulse_line_old, sample_vib_line_old):
+        """파일 10개 배치 적재."""
+        paths = []
+        for i in range(5):
+            date = f"25092{i}"
+            p = tmp_path / f"PULSE_{date}.csv"
+            p.write_text(sample_pulse_line_old + "\n")
+            paths.append(str(p))
+            v = tmp_path / f"VIB_{date}.csv"
+            v.write_text(sample_vib_line_old + "\n")
+            paths.append(str(v))
+
+        result = ingest_files(paths)
+        assert result["total_files"] == 10
+        assert len(result["details"]) == 10
+
+    def test_ingest_batch_partial_failure(self, tmp_path, sample_pulse_line_old):
+        """정상 파일 + 알 수 없는 타입 섞여있을 때 정상 파일은 성공."""
+        good = tmp_path / "PULSE_250920.csv"
+        good.write_text(sample_pulse_line_old + "\n")
+        bad = tmp_path / "DATA_250920.csv"
+        bad.write_text("invalid\n")
+
+        result = ingest_files([str(good), str(bad)])
+        assert result["total_files"] == 2
+        details = {d["filename"]: d for d in result["details"]}
+        assert details["PULSE_250920.csv"]["cycles_ingested"] >= 0
+        assert len(details["DATA_250920.csv"]["errors"]) > 0
+
+    def test_ingest_batch_duplicate_skip(self, tmp_path, sample_pulse_line_old):
+        """이미 적재된 파일을 다시 보냈을 때 처리."""
+        csv = tmp_path / "PULSE_250920.csv"
+        csv.write_text(sample_pulse_line_old + "\n")
+
+        ingest_file(str(csv))
+        result = ingest_files([str(csv)])
+        assert result["total_files"] == 1
+
+    def test_ingest_batch_with_empty_file(self, tmp_path, sample_pulse_line_old):
+        """정상 파일 + 빈 파일 섞여있을 때."""
+        good = tmp_path / "PULSE_250920.csv"
+        good.write_text(sample_pulse_line_old + "\n")
+        empty = tmp_path / "PULSE_250921.csv"
+        empty.write_text("")
+
+        result = ingest_files([str(good), str(empty)])
+        assert result["total_files"] == 2
+        details = {d["filename"]: d for d in result["details"]}
+        assert details["PULSE_250920.csv"]["cycles_ingested"] >= 0
