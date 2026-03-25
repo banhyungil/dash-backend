@@ -414,7 +414,7 @@ def ingest_files(paths: list[str], on_progress: Callable | None = None) -> dict:
                 _notify(completed)
 
     # 2단계: 배치 DB 저장 (커넥션 1회, 커밋 1회)
-    # SQLite는 commit이 가장 비싼 작업(디스크 fsync)이므로 한 번에 묶어야 빠름
+    # 단일 트랜잭션으로 묶어서 commit 1회로 처리
     conn = database.get_connection()
     try:
         for result in results:

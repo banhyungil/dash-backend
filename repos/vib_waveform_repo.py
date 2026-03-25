@@ -5,8 +5,10 @@ from services import database
 
 def insert(cycle_id: int, accel_x: list[float], accel_z: list[float], conn=None) -> None:
     """VIB 파형을 BYTEA로 변환하여 저장."""
-    own_conn = conn is None
-    if own_conn:
+
+    # 자체 커넥션 여부
+    is_own_conn = conn is None
+    if is_own_conn:
         conn = database.get_connection()
     try:
         x_bytes = struct.pack(f"{len(accel_x)}d", *accel_x)
@@ -20,10 +22,10 @@ def insert(cycle_id: int, accel_x: list[float], accel_z: list[float], conn=None)
                    sample_count = EXCLUDED.sample_count""",
             (cycle_id, x_bytes, z_bytes, len(accel_x)),
         )
-        if own_conn:
+        if is_own_conn:
             conn.commit()
     finally:
-        if own_conn:
+        if is_own_conn:
             conn.close()
 
 

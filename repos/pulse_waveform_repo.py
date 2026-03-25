@@ -6,8 +6,8 @@ from services import database
 def insert(cycle_id: int, pulses: list[int], accel_x: list[float],
            accel_y: list[float], accel_z: list[float], conn=None) -> None:
     """PULSE 원시 배열을 BYTEA로 변환하여 저장."""
-    own_conn = conn is None
-    if own_conn:
+    is_own_conn = conn is None
+    if is_own_conn:
         conn = database.get_connection()
     try:
         p_bytes = struct.pack(f"{len(pulses)}i", *pulses)
@@ -25,10 +25,10 @@ def insert(cycle_id: int, pulses: list[int], accel_x: list[float],
                    sample_count = EXCLUDED.sample_count""",
             (cycle_id, p_bytes, x_bytes, y_bytes, z_bytes, len(pulses)),
         )
-        if own_conn:
+        if is_own_conn:
             conn.commit()
     finally:
-        if own_conn:
+        if is_own_conn:
             conn.close()
 
 

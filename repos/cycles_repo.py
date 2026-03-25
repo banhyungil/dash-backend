@@ -48,8 +48,8 @@ def insert_many(cycles: list[dict], conn=None) -> list[int]:
     if not cycles:
         return []
 
-    own_conn = conn is None
-    if own_conn:
+    is_own_conn = conn is None
+    if is_own_conn:
         conn = database.get_connection()
     try:
         ids = []
@@ -57,11 +57,11 @@ def insert_many(cycles: list[dict], conn=None) -> list[int]:
             row = conn.execute(_INSERT_SQL, cycle).fetchone()  # type: ignore[arg-type]
             if row:
                 ids.append(row["id"])
-        if own_conn:
+        if is_own_conn:
             conn.commit()
         return ids
     finally:
-        if own_conn:
+        if is_own_conn:
             conn.close()
 
 
