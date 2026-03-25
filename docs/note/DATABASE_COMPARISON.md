@@ -143,7 +143,7 @@ conn.execute("SELECT avg(rpm_mean) FROM sqlite_scan('dash.db', 't_cycle')")
 | 실시간 수집 | 없음 (배치) | 시계열 DB 불필요 |
 | 인프라 | 단일 서버 | 임베디드 유리 |
 
-**결론**: PostgreSQL로 전환 완료 (2026-03). 실시간 센서 삽입 대비 + VIB 파형 BYTEA 저장.
+**결론**: PostgreSQL로 전환 완료 (2026-03). 실시간 센서 삽입 대비 + VIB 파형 BYTEA (Byte + Array "바이티아") 저장.
 
 ---
 

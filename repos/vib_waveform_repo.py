@@ -51,5 +51,6 @@ def _bytes_to_floats(data: bytes | memoryview | None) -> list[float]:
     if not data:
         return []
     b = bytes(data) if isinstance(data, memoryview) else data
+    # //: 정수 나눗셈
     count = len(b) // 8  # double = 8 bytes
     return list(struct.unpack(f"{count}d", b))
