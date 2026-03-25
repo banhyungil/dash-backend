@@ -27,23 +27,38 @@
 
 ### PULSE (펄스)
 
-롤러 표면에 새겨진 패턴을 센서가 감지할 때마다 발생하는 **신호 간격(마이크로초)**.
+롤러 표면에 새겨진 패턴을 **광학 센서(포토센서)**가 감지할 때마다 발생하는 **신호 간격(마이크로초)**.
 
 ```
-롤러 표면:  ──▮──────▮──────▮──────▮──  (▮ = 패턴)
+롤러 표면:  ████    ████    ████    ████   (████ = 반사 패턴, pattern_width=10mm)
+            ────────────────────────────
+                     ↑
+              광학 센서 (고정 위치)
+              반사/비반사 감지 → 펄스 신호 생성
+```
+
+```
 센서 감지:    ↑        ↑        ↑        ↑
 간격(μs):     5507     6228     5028     7887
 ```
 
+- 패턴이 센서 앞을 지나감 → **반사** → 펄스 ON
+- 패턴 사이 빈 공간 → **비반사** → 펄스 OFF
 - **간격이 짧으면** → 빨리 회전 (RPM 높음)
 - **간격이 길면** → 느리게 회전 (RPM 낮음)
 - 이 간격 데이터로 **RPM**, **MPM**을 계산
+- `shaft_dia`(축 지름)와 `pattern_width`(패턴 폭)를 알아야 펄스 간격 → RPM 변환 가능
+
+#### 측정 주기
+- **10분 간격**으로 센서가 동작
+- 1회 측정 시 **5초간** 데이터 수집 → CSV에 1줄(1사이클)로 기록
+- 5초는 **센서 펌웨어에서 정해진 값** (소프트웨어에서 변경 불가)
 
 #### CSV 포맷
 ```
 timestamp, [{'pulse': 5507, 'accel_x': 0.08, 'accel_y': 0.98, 'accel_z': 0.02}, ...]
 ```
-- 한 줄 = 1 사이클 (약 5초 측정 구간)
+- 한 줄 = 1 사이클 (5초 측정 구간)
 - 사이클당 5~15개 펄스 + 가속도 데이터
 
 ### VIB (Vibration, 진동)
@@ -57,7 +72,8 @@ timestamp, [{'pulse': 5507, 'accel_x': 0.08, 'accel_y': 0.98, 'accel_z': 0.02}, 
 
 - **고진동(>0.3g)**: 베어링 마모, 편심, 정렬 불량 등 설비 이상 징후
 - 샘플링: **1000Hz** (초당 1000회 측정)
-- 사이클당 약 **5,000개** 데이터 포인트
+- 사이클당 약 **5,000개** 샘플 포인트 (1000Hz × 5초)
+- "포인트" = 1개 측정 시점의 가속도 값 (샘플 포인트)
 
 #### CSV 포맷
 ```
@@ -81,6 +97,7 @@ RPM = (60 / 2π) × (pattern_width / (radius × pulse_duration/1000)) × 1000
 - `shaft_dia`: 샤프트 직경 (기본 50mm)
 - `pattern_width`: 패턴 간격 (기본 10mm)
 - `target_rpm`: 목표 RPM (기본 100)
+- `pulse_duration`: purse간 시간간격
 
 ### MPM (Meters Per Minute, 분당 미터)
 
@@ -94,15 +111,17 @@ MPM = RPM × π × roll_diameter / 1000
 
 ### Expected Pulse Count (예상 펄스 수)
 
-5초 샘플링 구간에서 예상되는 펄스 수.
-실제 펄스 수가 예상 대비 **±10%** 이내면 유효(valid)로 판정.
+RPM 평균값으로 계산한 **이론적 펄스 수**. DB에 `expected_count`로 저장 (참고용).
 
 ```
-유효:   실제 5개, 예상 5개 → 오차 0% → ✓ valid
-무효:   실제 2개, 예상 5개 → 오차 60% → ✗ invalid (스킵)
+pulse_width = pattern_width / (rpm_mean / 9.549 / 1000) / (shaft_dia / 2) × 1000  (μs)
+expected_count = ceil(5,000,000 / pulse_width)
 ```
 
-무효 사이클은 센서 오작동, 설비 정지 등의 이유로 발생.
+예: RPM=100, shaft_dia=50, pattern_width=10 → "이 속도로 5초간 돌리면 펄스 N개"
+
+실측값 `set_count`와 비교하면 데이터 품질 판단 가능.
+(이전에는 `is_valid` 플래그로 DB에 저장했으나, tolerance가 유동적이므로 제거됨. 필요 시 조회 시점에 동적 계산.)
 
 ---
 
@@ -117,55 +136,58 @@ MPM = RPM × π × roll_diameter / 1000
 
 ## 디바이스 매핑
 
-| MAC 주소 | 세션명 | 설명 |
-|----------|--------|------|
+| MAC 주소 (device) | 디바이스명 (device_name) | 설명 |
+|--------------------|--------------------------|------|
 | `0013A20041F71B01` | R1 | 롤러 1 |
 | `0013A20041F9D466` | R2 | 롤러 2 |
 | `0013A20041F98275` | R3 | 롤러 3 |
 | `0013A20041F9D4F8` | R4 | 롤러 4 |
 
+- `device`: 센서 MAC 주소 (하드웨어 식별자)
+- `device_name`: 사람이 읽기 쉬운 별칭 (R1/R2/R3/R4)
+- 설정 키: `device_name_map` (이전: `device_session_map`)
+
 ---
 
 ## 데이터 저장 구조
 
-DB와 CSV 파일이 역할을 분리하여 데이터를 관리한다.
+PostgreSQL에 집계값 + 원시 파형을 모두 저장. CSV 파일 의존성 없음.
 
-### DB 저장 (t_cycle 테이블) — 집계값만
+### t_cycle — 사이클별 집계값
 
 | 구분 | 컬럼 | 설명 |
 |------|------|------|
+| 메타 | timestamp, date, month, device, device_name, cycle_index | 사이클 식별 |
 | RPM/MPM | rpm_mean, rpm_min, rpm_max, mpm_mean, mpm_min, mpm_max | 사이클별 통계 |
-| 진동 | max_vib_x, max_vib_z | X/Z축 가속도 최대 절대값 |
-| 진동 | high_vib_event | 0.3g 초과 여부 (0 또는 1) |
-| 메타 | duration_ms, set_count, expected_count, is_valid | 사이클 유효성 |
-| 추적 | source_path | 원본 CSV 파일 경로 |
+| 진동 피크 | max_vib_x, max_vib_z | X/Z축 가속도 최대 절대값 |
+| 메타 | duration_ms, set_count, expected_count | 사이클 메타데이터 |
+| 통계 | pulse_x_rms, vib_z_peak, burst_count 등 | 축별 진동 통계 (50개 컬럼) |
 
-- 전체 배열 데이터(수천 포인트)는 DB에 저장하지 않음
-- 목록 조회, KPI 통계 등에 사용
+- `high_vib_event` 컬럼은 제거됨 → 조회 시 `max_vib_x > vib_threshold`로 동적 계산
+- `is_valid` 컬럼은 제거됨 → tolerance가 유동적이므로 필요 시 동적 계산
 
-### CSV 파일 — raw 배열 데이터
+### t_vib_waveform — VIB 원시 파형 (BYTEA)
 
-| 파일 | 배열 데이터 | 용도 |
-|------|------------|------|
-| PULSE_*.csv | pulse_timeline, accel_x/y/z, rpm_data | RPM 차트, 펄스 가속도 차트 |
-| VIB_*.csv | accel_x, accel_z (사이클당 ~5000개) | Vibration 파형 차트 |
+| 컬럼 | 타입 | 설명 |
+|------|------|------|
+| cycle_id | INTEGER FK | t_cycle 참조 |
+| accel_x | BYTEA | X축 가속도 배열 (float → 바이너리) |
+| accel_z | BYTEA | Z축 가속도 배열 (float → 바이너리) |
+| sample_count | INTEGER | 샘플 수 (보통 5,000) |
 
-- API 조회 시 `source_path` 기반으로 원본 CSV에서 on-demand 로드
-- **CSV 원본 파일이 없으면 차트 배열 데이터를 볼 수 없음**
+- TOAST 자동 압축: 40KB 원본 → ~15-20KB 저장
+- 메인 테이블 조회 시 파형 컬럼을 SELECT하지 않으면 I/O 없음
 
 ### 조회 흐름
 
 ```
 프론트 → GET /cycles/daily?month=2603&date=260301
   ↓
-DB에서 사이클 목록 + 집계값 조회
+t_cycle에서 사이클 목록 + 집계값 조회
   ↓
-각 사이클의 source_path로 원본 CSV 참조
+t_vib_waveform에서 파형 배열 조회 (필요 시)
   ↓
-PULSE CSV → rpm_timeline, rpm_data, pulse_accel_x/y/z
-VIB CSV   → vib_accel_x, vib_accel_z
-  ↓
-집계값 + raw 배열을 합쳐서 DailyDataResponse로 응답
+DailyDataResponse로 응답 (CSV 파일 참조 없음)
 ```
 
 ---
@@ -174,15 +196,17 @@ VIB CSV   → vib_accel_x, vib_accel_z
 
 ```
 센서 (R1~R4)
-  ↓ 5초마다 측정
+  ↓ 10분 간격, 5초간 측정
 CSV 파일 (PULSE_YYMMDD.csv, VIB_YYMMDD.csv)
   ↓ 프론트에서 업로드 / 경로 지정
-CSV 파싱 + RPM/MPM 계산 + 유효성 검증
+CSV 파싱 + RPM/MPM 계산 + 진동 통계 계산
   ↓
-SQLite DB (집계값: rpm_mean, mpm_mean, duration, 진동 이벤트)
+PostgreSQL DB
+  ├── t_cycle: 집계값 (rpm_mean, mpm_mean, 진동 stats)
+  └── t_vib_waveform: VIB 원시 파형 (BYTEA)
   ↓
-통계 조회 (가동시간, 이벤트 횟수 등)
-차트 렌더링 (RPM 타임라인, VIB 파형 — 원본 CSV에서 직접 읽기)
+통계 조회 (가동시간, 고진동 이벤트 등 — 동적 계산)
+차트 렌더링 (RPM 타임라인, VIB 파형 — DB에서 조회)
 ```
 
 ### 분포 통계

@@ -1,10 +1,10 @@
 """일별 사이클 데이터 빌드 서비스."""
 import math
-from pathlib import Path
 
 from services.settings_service import get_setting
 from repos.cycles_repo import find_by_date, find_one
-from services.cached_csv_parser import parse_pulse_cached, parse_vib_cached
+from repos.pulse_waveform_repo import find_by_cycle_id as find_pulse_waveform
+from repos.vib_waveform_repo import find_by_cycle_id as find_vib_waveform
 from services.rpm_service import process_pulse_compact_to_rpm
 from services.session_merger import calculate_continuous_timeline
 
@@ -25,7 +25,7 @@ def build_daily_data(month: str, date: str) -> dict:
 
     처리 흐름:
       1. DB에서 해당 날짜 사이클 집계값 조회
-      2. source_path로 CSV에서 배열 데이터(RPM 타임라인, 가속도 등) 로드
+      2. cycle id로 DB에서 배열 데이터(RPM 타임라인, 가속도 등) 로드
       3. VIB 데이터 매칭
       4. 중력 보정
       5. DB stats → 프론트 응답 형식 변환
@@ -43,9 +43,9 @@ def build_daily_data(month: str, date: str) -> dict:
     roll_diameter = get_setting("roll_diameter")
     gravity_offset = get_setting("gravity_offset")
 
-    # source_path 기반으로 원본 CSV에서 배열 데이터 로드 (RPM 타임라인, 가속도 파형)
+    # cycle id 기반으로 DB에서 배열 데이터 로드 (RPM 타임라인, 가속도 파형)
     result_cycles = _load_pulse_arrays(db_cycles, shaft_dia, pattern_width, roll_diameter)
-    # PULSE_*.csv → VIB_*.csv 경로 변환으로 VIB 가속도 배열 매칭
+    # cycle id 기반으로 DB에서 VIB 가속도 배열 매칭
     _load_vib_arrays(result_cycles)
     # R1/R2는 Z축에서 1g 차감 (센서 장착 방향에 의한 중력 성분 제거)
     _apply_gravity_correction(result_cycles, gravity_offset)
@@ -76,7 +76,7 @@ def build_cycle_detail(date: str, device_name: str, cycle_index: int) -> dict | 
     shaft_dia = get_setting("shaft_dia")
     pattern_width = get_setting("pattern_width")
 
-    source_path = cycle.get("source_path", "")
+    cycle_id = cycle["id"]
     result = {
         "date": date,
         "device_name": device_name,
@@ -89,30 +89,24 @@ def build_cycle_detail(date: str, device_name: str, cycle_index: int) -> dict | 
         "vib_accel_x": [], "vib_accel_z": [],
     }
 
-    if source_path and Path(source_path).exists():
-        parsed = parse_pulse_cached(source_path)
-        if cycle_index < len(parsed["cycles"]):
-            raw = parsed["cycles"][cycle_index]
-            rpm_result = process_pulse_compact_to_rpm(
-                raw["pulses"], raw["accel_x"], raw["accel_y"], raw["accel_z"],
-                shaft_dia, pattern_width,
-            )
-            if rpm_result:
-                result["rpm_timeline"] = rpm_result["timeLine"]
-                result["rpm_data"] = rpm_result["dataRPM"]
-                result["pulse_timeline"] = rpm_result.get("rawTimeLine", [])
-                result["pulse_accel_x"] = rpm_result.get("rawAccelX", [])
-                result["pulse_accel_y"] = rpm_result.get("rawAccelY", [])
-                result["pulse_accel_z"] = rpm_result.get("rawAccelZ", [])
+    pw = find_pulse_waveform(cycle_id)
+    if pw:
+        rpm_result = process_pulse_compact_to_rpm(
+            pw["pulses"], pw["accel_x"], pw["accel_y"], pw["accel_z"],
+            shaft_dia, pattern_width,
+        )
+        if rpm_result:
+            result["rpm_timeline"] = rpm_result["timeLine"]
+            result["rpm_data"] = rpm_result["dataRPM"]
+            result["pulse_timeline"] = rpm_result.get("rawTimeLine", [])
+            result["pulse_accel_x"] = rpm_result.get("rawAccelX", [])
+            result["pulse_accel_y"] = rpm_result.get("rawAccelY", [])
+            result["pulse_accel_z"] = rpm_result.get("rawAccelZ", [])
 
-    if source_path:
-        vib_path = source_path.replace("PULSE_", "VIB_")
-        if vib_path != source_path and Path(vib_path).exists():
-            parsed_vib = parse_vib_cached(vib_path)
-            if cycle_index < len(parsed_vib["cycles"]):
-                vib_cycle = parsed_vib["cycles"][cycle_index]
-                result["vib_accel_x"] = vib_cycle["accel_x"]
-                result["vib_accel_z"] = vib_cycle["accel_z"]
+    vw = find_vib_waveform(cycle_id)
+    if vw:
+        result["vib_accel_x"] = vw["accel_x"]
+        result["vib_accel_z"] = vw["accel_z"]
 
     return result
 
@@ -122,28 +116,22 @@ def build_cycle_detail(date: str, device_name: str, cycle_index: int) -> dict | 
 # ---------------------------------------------------------------------------
 
 def _load_pulse_arrays(cycles: list[dict], shaft_dia: float, pattern_width: float, roll_diameter: float) -> list[dict]:
-    """source_path로 CSV에서 RPM/가속도 배열 데이터 로드."""
+    """cycle id로 DB에서 RPM/가속도 배열 데이터 로드."""
     result = []
-    cache: dict[str, dict] = {}
 
     for cycle in cycles:
-        source_path = cycle.get("source_path")
-        if not source_path or not Path(source_path).exists():
+        cycle_id = cycle.get("id")
+        if not cycle_id:
             result.append({**cycle, **_EMPTY_ARRAYS})
             continue
 
-        if source_path not in cache:
-            cache[source_path] = parse_pulse_cached(source_path)
-        parsed = cache[source_path]
-
-        idx = cycle["cycle_index"]
-        if idx >= len(parsed["cycles"]):
+        pw = find_pulse_waveform(cycle_id)
+        if not pw:
             result.append({**cycle, **_EMPTY_ARRAYS})
             continue
 
-        raw = parsed["cycles"][idx]
         rpm_result = process_pulse_compact_to_rpm(
-            raw["pulses"], raw["accel_x"], raw["accel_y"], raw["accel_z"],
+            pw["pulses"], pw["accel_x"], pw["accel_y"], pw["accel_z"],
             shaft_dia, pattern_width,
         )
 
@@ -166,25 +154,18 @@ def _load_pulse_arrays(cycles: list[dict], shaft_dia: float, pattern_width: floa
 
 
 def _load_vib_arrays(cycles: list[dict]):
-    """PULSE → VIB 경로 변환으로 VIB 가속도 배열 로드."""
-    cache: dict[str, dict] = {}
+    """cycle id로 DB에서 VIB 가속도 배열 로드."""
     for cycle in cycles:
-        source_path = cycle.get("source_path", "")
-        if not source_path:
+        cycle_id = cycle.get("id")
+        if not cycle_id:
             continue
 
-        vib_path = source_path.replace("PULSE_", "VIB_")
-        if vib_path == source_path or not Path(vib_path).exists():
+        vw = find_vib_waveform(cycle_id)
+        if not vw:
             continue
 
-        if vib_path not in cache:
-            cache[vib_path] = parse_vib_cached(vib_path)
-
-        idx = cycle["cycle_index"]
-        if idx < len(cache[vib_path]["cycles"]):
-            vib_cycle = cache[vib_path]["cycles"][idx]
-            cycle["vib_accel_x"] = vib_cycle["accel_x"]
-            cycle["vib_accel_z"] = vib_cycle["accel_z"]
+        cycle["vib_accel_x"] = vw["accel_x"]
+        cycle["vib_accel_z"] = vw["accel_z"]
 
 
 def _apply_gravity_correction(cycles: list[dict], gravity_offset: dict):

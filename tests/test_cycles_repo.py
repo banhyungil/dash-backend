@@ -25,7 +25,6 @@ def _make_cycle(**overrides):
         "max_vib_z": 0.02,
         "burst_count": 2,
         "peak_impact_count": 1,
-        "source_path": "/test/PULSE_260311.csv",
     }
     # stats 컬럼 기본값 0
     for col in _STAT_COLUMNS:
@@ -43,7 +42,7 @@ class TestCyclesRepo:
             _make_cycle(cycle_index=2, max_vib_x=0.5),
         ]
         inserted = insert_many(cycles)
-        assert inserted == 3
+        assert len(inserted) == 3
 
         status = get_monthly_summary()
         assert status["total_cycles"] == 3
@@ -56,7 +55,7 @@ class TestCyclesRepo:
         assert month["high_vib_events"] == 1
 
     def test_insert_empty(self):
-        assert insert_many([]) == 0
+        assert insert_many([]) == []
 
     def test_upsert_on_duplicate(self):
         """INSERT OR REPLACE should update on duplicate (device, date, cycle_index)."""

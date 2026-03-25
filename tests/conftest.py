@@ -18,12 +18,11 @@ _TEST_DB_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:dash@localh
 @pytest.fixture(autouse=True)
 def _use_test_db(monkeypatch):
     """Each test gets a clean PostgreSQL schema."""
-    conn = psycopg.connect(_TEST_DB_URL, row_factory=dict_row, autocommit=False)  # type: ignore[call-overload]
-
-    # 스키마 초기화 (모든 테이블 삭제 후 재생성)
-    conn.execute("DROP SCHEMA public CASCADE")
-    conn.execute("CREATE SCHEMA public")
-    conn.commit()
+    # autocommit=True로 스키마 초기화 (DDL 락 방지)
+    admin = psycopg.connect(_TEST_DB_URL, autocommit=True)  # type: ignore[call-overload]
+    admin.execute("DROP SCHEMA public CASCADE")
+    admin.execute("CREATE SCHEMA public")
+    admin.close()
 
     def _get_test_connection():
         return psycopg.connect(_TEST_DB_URL, row_factory=dict_row, autocommit=False)  # type: ignore[call-overload]
@@ -34,8 +33,6 @@ def _use_test_db(monkeypatch):
     init_db()
 
     yield
-
-    conn.close()
 
 
 @pytest.fixture

@@ -63,8 +63,8 @@ def create_integrated_csv_raw(
     dest_dir: Path,
 ):
     """
-    Create integrated CSV from RAW data (no RPM calculation, no filtering).
-    Just parse raw CSV and sort by timestamp.
+    Create integrated CSV from DB waveform data (no RPM calculation, no filtering).
+    Query waveforms by cycle id and sort by timestamp.
 
     Args:
         month: Month code
@@ -72,51 +72,50 @@ def create_integrated_csv_raw(
         devices: List of device MAC addresses
         dest_dir: Destination directory
     """
-    from services.folder_scanner import get_csv_files
-    from services.cached_csv_parser import parse_pulse_cached, parse_vib_cached
-    from services.settings_service import get_setting
+    from repos.cycles_repo import find_by_date
+    from repos.pulse_waveform_repo import find_by_cycle_id as find_pulse_waveform
+    from repos.vib_waveform_repo import find_by_cycle_id as find_vib_waveform
 
     dest_dir.mkdir(parents=True, exist_ok=True)
+
+    # DB에서 해당 날짜의 사이클 조회
+    db_cycles = find_by_date(month, date)
 
     all_pulse_cycles = []
     all_vib_cycles = []
 
-    # Collect all raw data from all devices
-    for device in devices:
-        csv_files = get_csv_files(month, date, device)
-        device_name = get_setting("device_name_map").get(device, device)
+    for cycle in db_cycles:
+        cycle_id = cycle["id"]
+        device = cycle["device"]
+        device_name = cycle["device_name"]
+        cycle_index = cycle["cycle_index"]
+        timestamp = cycle["timestamp"]
 
-        # Parse PULSE files
-        for pulse_info in csv_files["pulse"]:
-            pulse_path = Path(pulse_info["path"])
-            parsed = parse_pulse_cached(pulse_path)
+        # PULSE 파형 조회
+        pw = find_pulse_waveform(cycle_id)
+        if pw:
+            all_pulse_cycles.append({
+                "timestamp": timestamp,
+                "device": device,
+                "device_name": device_name,
+                "cycle_index": cycle_index,
+                "pulses": pw["pulses"],
+                "accel_x": pw["accel_x"],
+                "accel_y": pw["accel_y"],
+                "accel_z": pw["accel_z"],
+            })
 
-            for i, cycle in enumerate(parsed["cycles"]):
-                all_pulse_cycles.append({
-                    "timestamp": parsed["timestamps"][i],
-                    "device": device,
-                    "device_name": device_name,
-                    "cycle_index": i,
-                    "pulses": cycle["pulses"],
-                    "accel_x": cycle["accel_x"],
-                    "accel_y": cycle["accel_y"],
-                    "accel_z": cycle["accel_z"],
-                })
-
-        # Parse VIB files
-        for vib_info in csv_files["vib"]:
-            vib_path = Path(vib_info["path"])
-            parsed_vib = parse_vib_cached(vib_path)
-
-            for i, cycle in enumerate(parsed_vib["cycles"]):
-                all_vib_cycles.append({
-                    "timestamp": parsed_vib["timestamps"][i],
-                    "device": device,
-                    "device_name": device_name,
-                    "cycle_index": i,
-                    "accel_x": cycle["accel_x"],
-                    "accel_z": cycle["accel_z"],
-                })
+        # VIB 파형 조회
+        vw = find_vib_waveform(cycle_id)
+        if vw:
+            all_vib_cycles.append({
+                "timestamp": timestamp,
+                "device": device,
+                "device_name": device_name,
+                "cycle_index": cycle_index,
+                "accel_x": vw["accel_x"],
+                "accel_z": vw["accel_z"],
+            })
 
     # Sort by timestamp
     all_pulse_cycles.sort(key=lambda c: c["timestamp"])

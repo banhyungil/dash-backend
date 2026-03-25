@@ -100,9 +100,6 @@ CREATE TABLE IF NOT EXISTS t_cycle (
     burst_count     INTEGER DEFAULT 0,
     peak_impact_count INTEGER DEFAULT 0,
 
-    -- Source tracking
-    source_path     TEXT,
-
     UNIQUE(device, date, cycle_index)
 );
 
@@ -110,7 +107,17 @@ CREATE INDEX IF NOT EXISTS idx_t_cycle_date ON t_cycle(date);
 CREATE INDEX IF NOT EXISTS idx_t_cycle_month ON t_cycle(month);
 CREATE INDEX IF NOT EXISTS idx_t_cycle_device_name ON t_cycle(device_name);
 CREATE INDEX IF NOT EXISTS idx_t_cycle_timestamp ON t_cycle(timestamp);
-CREATE INDEX IF NOT EXISTS idx_t_cycle_source ON t_cycle(source_path);
+
+CREATE TABLE IF NOT EXISTS t_pulse_waveform (
+    id              SERIAL PRIMARY KEY,
+    cycle_id        INTEGER NOT NULL REFERENCES t_cycle(id) ON DELETE CASCADE,
+    pulses          BYTEA,
+    accel_x         BYTEA,
+    accel_y         BYTEA,
+    accel_z         BYTEA,
+    sample_count    INTEGER,
+    UNIQUE(cycle_id)
+);
 
 CREATE TABLE IF NOT EXISTS t_vib_waveform (
     id              SERIAL PRIMARY KEY,

@@ -2,7 +2,6 @@ import re
 import logging
 from pathlib import Path
 from config import DATA_DIR
-from services.cache_manager import read_manifest
 
 logger = logging.getLogger(__name__)
 
@@ -64,19 +63,7 @@ def get_devices_for_month(month: str) -> list[str]:
 
 
 def get_dates_for_month_device(month: str, device: str) -> list[dict]:
-    """Return dates with cycle counts for a given month and device.
-    Tries manifest cache first, falls back to filesystem scan.
-    """
-    # Try manifest first
-    manifest = read_manifest()
-    if manifest:
-        month_data = manifest.get("months", {}).get(month)
-        if month_data:
-            device_data = month_data.get("devices", {}).get(device)
-            if device_data:
-                return device_data.get("dates", [])
-
-    # Fallback: filesystem scan
+    """Return dates with cycle counts for a given month and device."""
     return _scan_dates_for_month_device(month, device)
 
 

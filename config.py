@@ -16,9 +16,7 @@ load_dotenv(_env_file)
 # 서버 환경 설정
 # ---------------------------------------------------------------------------
 DATA_DIR = Path(os.environ.get("DATA_DIR", backend_dir / "data"))
-CACHE_DIR = Path(os.environ.get("CACHE_DIR", backend_dir / ".cache"))
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:dash@localhost:5432/dash")
 SETTINGS_FILE = Path(os.environ.get("SETTINGS_FILE", backend_dir / "device_settings.json"))
-CACHE_VERSION = 3
 VIB_SAMPLE_RATE = 1000  # Hz (ADXL355)
 RPM_READ_OFFSET = 2     # Skip first N pulses

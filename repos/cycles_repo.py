@@ -16,8 +16,7 @@ _INSERT_SQL = """
         duration_ms, set_count, expected_count,
         max_vib_x, max_vib_z,
         {stat_cols},
-        burst_count, peak_impact_count,
-        source_path
+        burst_count, peak_impact_count
     ) VALUES (
         %(timestamp)s, %(date)s, %(month)s, %(device)s, %(device_name)s, %(cycle_index)s,
         %(rpm_mean)s, %(rpm_min)s, %(rpm_max)s,
@@ -25,8 +24,7 @@ _INSERT_SQL = """
         %(duration_ms)s, %(set_count)s, %(expected_count)s,
         %(max_vib_x)s, %(max_vib_z)s,
         {stat_params},
-        %(burst_count)s, %(peak_impact_count)s,
-        %(source_path)s
+        %(burst_count)s, %(peak_impact_count)s
     )
     ON CONFLICT (device, date, cycle_index) DO UPDATE SET
         timestamp = EXCLUDED.timestamp,
@@ -36,30 +34,32 @@ _INSERT_SQL = """
         duration_ms = EXCLUDED.duration_ms, set_count = EXCLUDED.set_count,
         expected_count = EXCLUDED.expected_count,
         max_vib_x = EXCLUDED.max_vib_x, max_vib_z = EXCLUDED.max_vib_z,
-        burst_count = EXCLUDED.burst_count, peak_impact_count = EXCLUDED.peak_impact_count,
-        source_path = EXCLUDED.source_path
+        burst_count = EXCLUDED.burst_count, peak_impact_count = EXCLUDED.peak_impact_count
+    RETURNING id
 """.format(
     stat_cols=", ".join(_STAT_COLUMNS),
     stat_params=", ".join(f"%({c})s" for c in _STAT_COLUMNS),
 )
 
 
-def insert_many(cycles: list[dict], conn=None) -> int:
-    """Bulk insert cycles. If conn is provided, does NOT commit (caller manages tx)."""
+def insert_many(cycles: list[dict], conn=None) -> list[int]:
+    """Bulk insert cycles. Returns list of inserted/upserted row ids.
+    If conn is provided, does NOT commit (caller manages tx)."""
     if not cycles:
-        return 0
+        return []
 
     own_conn = conn is None
     if own_conn:
         conn = database.get_connection()
     try:
-        count = 0
+        ids = []
         for cycle in cycles:
-            conn.execute(_INSERT_SQL, cycle)  # type: ignore[arg-type]
-            count += 1
+            row = conn.execute(_INSERT_SQL, cycle).fetchone()  # type: ignore[arg-type]
+            if row:
+                ids.append(row["id"])
         if own_conn:
             conn.commit()
-        return count
+        return ids
     finally:
         if own_conn:
             conn.close()
@@ -106,14 +106,13 @@ def find_by_date(month: str, date: str) -> list[dict]:
     conn = database.get_connection()
     try:
         rows = conn.execute("""
-            SELECT timestamp, date, month, device, device_name, cycle_index,
+            SELECT id, timestamp, date, month, device, device_name, cycle_index,
                    rpm_mean, rpm_min, rpm_max,
                    mpm_mean, mpm_min, mpm_max,
                    duration_ms, set_count, expected_count,
                    max_vib_x, max_vib_z,
                    {stat_cols},
-                   burst_count, peak_impact_count,
-                   source_path
+                   burst_count, peak_impact_count
             FROM t_cycle
             WHERE month = %s AND date = %s
             ORDER BY timestamp
@@ -128,12 +127,11 @@ def find_one(date: str, device_name: str, cycle_index: int) -> dict | None:
     conn = database.get_connection()
     try:
         row = conn.execute("""
-            SELECT timestamp, date, month, device, device_name, cycle_index,
+            SELECT id, timestamp, date, month, device, device_name, cycle_index,
                    rpm_mean, rpm_min, rpm_max,
                    mpm_mean, mpm_min, mpm_max,
                    duration_ms, set_count, expected_count,
-                   max_vib_x, max_vib_z,
-                   source_path
+                   max_vib_x, max_vib_z
             FROM t_cycle
             WHERE date = %s AND device_name = %s AND cycle_index = %s
         """, (date, device_name, cycle_index)).fetchone()

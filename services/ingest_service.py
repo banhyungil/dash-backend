@@ -15,6 +15,8 @@ from services.vibration_analyzer import analyze_axis
 from services import database
 from repos.cycles_repo import insert_many
 from repos.ingested_files_repo import upsert as upsert_ingested_file, exists_by_path
+from repos.pulse_waveform_repo import insert as insert_pulse_waveform
+from repos.vib_waveform_repo import insert as insert_vib_waveform
 
 logger = logging.getLogger(__name__)
 
@@ -167,6 +169,7 @@ def _process_pulse_file(file_path: str, device: str | None = None,
         try:
             # 사이클에서 펄스/가속도 배열 추출
             data = cycle["data"]
+            # 대괄호 [ ] : 리스트 컴프리헨션
             pulses = [item["pulse"] for item in data]       # 펄스 간격 (μs)
             accel_x = [item.get("accel_x", 0) for item in data]  # X축 가속도 (g)
             accel_y = [item.get("accel_y", 0) for item in data]
@@ -220,7 +223,10 @@ def _process_pulse_file(file_path: str, device: str | None = None,
                 "expected_count": expected_count,
                 "max_vib_x": max((abs(v) for v in accel_x), default=0),
                 "max_vib_z": max((abs(v) for v in corrected_z), default=0),
-                "source_path": source,
+                "_raw_pulses": pulses,
+                "_raw_accel_x": accel_x,
+                "_raw_accel_y": accel_y,
+                "_raw_accel_z": corrected_z,
                 **_flatten_axis_stats("pulse_x", px_stats),
                 **_flatten_axis_stats("pulse_y", py_stats),
                 **_flatten_axis_stats("pulse_z", pz_stats),
@@ -253,6 +259,14 @@ def _process_vib_file(file_path: str) -> dict:
 
     raw_cycles = parse_vib_csv(path)
 
+    vib_raw_cycles = []
+    for vc in raw_cycles:
+        vib_data = vc["data"]
+        vib_raw_cycles.append({
+            "accel_x": [item.get("accel_x", 0) for item in vib_data],
+            "accel_z": [item.get("accel_z", 0) for item in vib_data],
+        })
+
     return {
         "filename": filename,
         "db_rows": [],
@@ -261,25 +275,24 @@ def _process_vib_file(file_path: str) -> dict:
         "source": source,
         "file_type": "VIB",
         "vib_cycle_count": len(raw_cycles),
+        "vib_raw_cycles": vib_raw_cycles,
     }
 
 
-def _enrich_vib_stats(pulse_result: dict):
+def _enrich_vib_stats(pulse_result: dict, vib_file_path: str | None = None):
     """PULSE 적재 결과에 매칭되는 VIB 파일의 stats를 병합.
 
-    PULSE_250920.csv → VIB_250920.csv 로 경로 변환하여 매칭.
-    VIB raw 배열은 DB에 저장하지 않고, stats(rms/peak/q1 등)만 계산하여
-    PULSE로 생성된 t_cycle 행에 업데이트한다.
+    vib_file_path가 주어지면 해당 파일을 직접 파싱.
+    VIB raw 배열은 _vib_accel_x, _vib_accel_z 키로 db_rows에 추가하고,
+    stats(rms/peak/q1 등)만 계산하여 PULSE로 생성된 t_cycle 행에 업데이트한다.
     """
-    # 1) PULSE 경로에서 VIB 경로 유도 (PULSE_250920.csv → VIB_250920.csv)
-    source = pulse_result.get("source", "")
-    vib_path = source.replace("PULSE_", "VIB_")
-    if vib_path == source or not Path(vib_path).exists():
+    # 1) VIB 파일 경로 확인
+    if not vib_file_path or not Path(vib_file_path).exists():
         return  # 매칭되는 VIB 파일 없음
 
     # 2) VIB CSV 파싱 — 사이클 배열 구조: [{"data": [{"accel_x", "accel_z"}, ...]}, ...]
     try:
-        vib_cycles = parse_vib_csv(Path(vib_path))
+        vib_cycles = parse_vib_csv(Path(vib_file_path))
     except Exception:
         return
 
@@ -316,15 +329,22 @@ def _enrich_vib_stats(pulse_result: dict):
         row["burst_count"] += vx_stats["burst_count"] + vz_stats["burst_count"]
         row["peak_impact_count"] += vx_stats["peak_impact_count"] + vz_stats["peak_impact_count"]
 
+        # 8) VIB 원시 배열을 db_rows에 추가 (파형 DB 저장용)
+        row["_vib_accel_x"] = vib_x
+        row["_vib_accel_z"] = vib_z
+
 
 def _process_file(file_path: str) -> dict:
     """단일 파일 처리 (파싱 + 계산). DB 쓰기 없음.
     파일명 접두사로 PULSE/VIB 자동 판별.
     """
-    name = Path(file_path).name.upper()
+    path = Path(file_path)
+    name = path.name.upper()
     if name.startswith("PULSE_"):
         result = _process_pulse_file(file_path)
-        _enrich_vib_stats(result)
+        # PULSE 경로에서 VIB 경로 유도 (PULSE_250920.csv → VIB_250920.csv)
+        vib_file_path = str(path.parent / path.name.replace("PULSE_", "VIB_"))
+        _enrich_vib_stats(result, vib_file_path=vib_file_path)
         return result
     elif name.startswith("VIB_"):
         return _process_vib_file(file_path)
@@ -433,12 +453,40 @@ def ingest_files(paths: list[str], on_progress: Callable | None = None) -> dict:
 def _write_result_to_db(result: dict, conn=None):
     """파싱 결과를 DB에 저장. conn이 주어지면 커밋하지 않음 (호출자가 관리)."""
     if result["file_type"] == "PULSE" and result["db_rows"]:
-        inserted = insert_many(result["db_rows"], conn=conn)
+        # 각 row를 개별 INSERT하여 cycle_id를 받고, 파형 데이터를 저장
+        inserted_count = 0
+        for row in result["db_rows"]:
+            # 원시 배열을 pop하여 DB INSERT에 포함되지 않도록 처리
+            raw_pulses = row.pop("_raw_pulses", None)
+            raw_accel_x = row.pop("_raw_accel_x", None)
+            raw_accel_y = row.pop("_raw_accel_y", None)
+            raw_accel_z = row.pop("_raw_accel_z", None)
+            vib_accel_x = row.pop("_vib_accel_x", None)
+            vib_accel_z = row.pop("_vib_accel_z", None)
+
+            # cycle INSERT → id 반환
+            ids = insert_many([row], conn=conn)
+            if not ids:
+                continue
+            cycle_id = ids[0]
+            inserted_count += 1
+
+            # PULSE 파형 저장
+            if raw_pulses is not None:
+                insert_pulse_waveform(
+                    cycle_id, raw_pulses, raw_accel_x, raw_accel_y, raw_accel_z,
+                    conn=conn,
+                )
+
+            # VIB 파형 저장
+            if vib_accel_x is not None:
+                insert_vib_waveform(cycle_id, vib_accel_x, vib_accel_z, conn=conn)
+
         upsert_ingested_file(
             result["source"], result["filename"], "PULSE",
-            inserted, result["skipped"], len(result["errors"]), conn=conn
+            inserted_count, result["skipped"], len(result["errors"]), conn=conn
         )
-        result["_inserted"] = inserted
+        result["_inserted"] = inserted_count
     elif result["file_type"] == "VIB":
         vib_count = result.get("vib_cycle_count", 0)
         upsert_ingested_file(
