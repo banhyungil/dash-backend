@@ -8,6 +8,8 @@ import psycopg
 from psycopg.rows import dict_row
 import pytest
 from dotenv import load_dotenv
+from alembic.config import Config
+from alembic import command
 
 load_dotenv(".env.test")
 
@@ -28,9 +30,14 @@ def _use_test_db(monkeypatch):
         return psycopg.connect(_TEST_DB_URL, row_factory=dict_row, autocommit=False)  # type: ignore[call-overload]
 
     monkeypatch.setattr("services.database.get_connection", _get_test_connection)
+    monkeypatch.setenv("DATABASE_URL", _TEST_DB_URL)
 
-    from services.database import init_db
-    init_db()
+    # alembic으로 스키마 생성 + 설정 시드
+    alembic_cfg = Config("alembic.ini")
+    command.upgrade(alembic_cfg, "head")
+
+    from services.database import seed_settings
+    seed_settings()
 
     yield
 

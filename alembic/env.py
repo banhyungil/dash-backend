@@ -13,8 +13,9 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# config.py에서 읽은 DATABASE_URL을 alembic에 전달
-config.set_main_option("sqlalchemy.url", DATABASE_URL)
+# config.py에서 읽은 DATABASE_URL을 alembic에 전달 (psycopg3 드라이버 사용)
+_sqla_url = DATABASE_URL.replace("postgresql://", "postgresql+psycopg://", 1)
+config.set_main_option("sqlalchemy.url", _sqla_url)
 
 target_metadata = None
 
