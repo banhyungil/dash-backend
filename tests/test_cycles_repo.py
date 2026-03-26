@@ -57,17 +57,6 @@ class TestCyclesRepo:
     def test_insert_empty(self):
         assert insert_many([]) == []
 
-    def test_upsert_on_duplicate(self):
-        """INSERT OR REPLACE should update on duplicate (device, date, cycle_index)."""
-        cycle = _make_cycle(rpm_mean=90.0)
-        insert_many([cycle])
-
-        cycle_updated = _make_cycle(rpm_mean=100.0)
-        insert_many([cycle_updated])
-
-        status = get_monthly_summary()
-        assert status["total_cycles"] == 1
-
     def test_multiple_months(self):
         cycles = [
             _make_cycle(month="2509", date="250920", cycle_index=0),

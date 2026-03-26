@@ -16,8 +16,8 @@ from services.vibration_analyzer import analyze_axis
 from services import database
 from repos.cycles_repo import insert_many
 from repos.ingested_files_repo import upsert as upsert_ingested_file, exists_by_path
-from repos.pulse_waveform_repo import insert as insert_pulse_waveform
-from repos.vib_waveform_repo import insert as insert_vib_waveform
+from repos.pulse_waveform_repo import insert_many_copy as copy_pulse_waveforms
+from repos.vib_waveform_repo import insert_many_copy as copy_vib_waveforms
 
 logger = logging.getLogger(__name__)
 
@@ -62,12 +62,10 @@ class PulseRawCycle(TypedDict):
     pulse_x_stats: AxisStats
     pulse_y_stats: AxisStats
     pulse_z_stats: AxisStats
-    burst_count: int
-    peak_impact_count: int
     raw_pulses: list[int]
-    raw_accel_x: list[float]
-    raw_accel_y: list[float]
-    raw_accel_z: list[float]
+    raw_accel_x_arr: list[float]
+    raw_accel_y_arr: list[float]
+    raw_accel_z_arr: list[float]
 
 
 class PulseResult(TypedDict):
@@ -82,8 +80,8 @@ class PulseResult(TypedDict):
 class VibRawCycle(TypedDict):
     """VIB CSV 사이클 1개 — VIB 2축 stats + 원시 파형."""
     cycle_index: int
-    accel_x: list[float]
-    accel_z: list[float]
+    accel_x_arr: list[float]
+    accel_z_arr: list[float]
     vib_x_stats: AxisStats
     vib_z_stats: AxisStats
 
@@ -124,11 +122,11 @@ class MergedCycle(TypedDict):
     burst_count: int
     peak_impact_count: int
     raw_pulses: list[int]
-    raw_accel_x: list[float]
-    raw_accel_y: list[float]
-    raw_accel_z: list[float]
-    vib_accel_x: list[float]
-    vib_accel_z: list[float]
+    raw_accel_x_arr: list[float]
+    raw_accel_y_arr: list[float]
+    raw_accel_z_arr: list[float]
+    vib_accel_x_arr: list[float]
+    vib_accel_z_arr: list[float]
 
 
 class IngestDetail(TypedDict):
@@ -292,14 +290,14 @@ def _process_pulse(file_path: str, device: str | None = None,
         try:
             data = cycle["data"]
             pulses = [item["pulse"] for item in data]
-            accel_x = [item.get("accel_x", 0) for item in data]
-            accel_y = [item.get("accel_y", 0) for item in data]
-            accel_z = [item.get("accel_z", 0) for item in data]
+            accel_x_arr = [item.get("accel_x", 0) for item in data]
+            accel_y_arr = [item.get("accel_y", 0) for item in data]
+            accel_z_arr = [item.get("accel_z", 0) for item in data]
             set_count = len(pulses)
 
             # RPM 계산
             rpm_result = process_pulse_compact_to_rpm(
-                pulses, accel_x, accel_y, accel_z, shaft_dia, pattern_width
+                pulses, accel_x_arr, accel_y_arr, accel_z_arr, shaft_dia, pattern_width
             )
             if rpm_result is None:
                 skipped += 1
@@ -315,12 +313,12 @@ def _process_pulse(file_path: str, device: str | None = None,
 
             # Z축 중력 보정
             z_off = gravity_offset.get(device_name, {}).get("z", 0.0)
-            corrected_z = [v + z_off for v in accel_z] if z_off != 0.0 else accel_z
+            corrected_z_arr = [v + z_off for v in accel_z_arr] if z_off != 0.0 else accel_z_arr
 
             # PULSE 3축 stats
-            px_stats: AxisStats = analyze_axis(accel_x)
-            py_stats: AxisStats = analyze_axis(accel_y)
-            pz_stats: AxisStats = analyze_axis(corrected_z)
+            px_stats: AxisStats = analyze_axis(accel_x_arr)
+            py_stats: AxisStats = analyze_axis(accel_y_arr)
+            pz_stats: AxisStats = analyze_axis(corrected_z_arr)
 
             cycles.append(PulseRawCycle(
                 timestamp=cycle["timestamp"],
@@ -341,12 +339,10 @@ def _process_pulse(file_path: str, device: str | None = None,
                 pulse_x_stats=px_stats,
                 pulse_y_stats=py_stats,
                 pulse_z_stats=pz_stats,
-                burst_count=px_stats["burst_count"] + py_stats["burst_count"] + pz_stats["burst_count"],
-                peak_impact_count=px_stats["peak_impact_count"] + py_stats["peak_impact_count"] + pz_stats["peak_impact_count"],
                 raw_pulses=pulses,
-                raw_accel_x=accel_x,
-                raw_accel_y=accel_y,
-                raw_accel_z=corrected_z,
+                raw_accel_x_arr=accel_x_arr,
+                raw_accel_y_arr=accel_y_arr,
+                raw_accel_z_arr=corrected_z_arr,
             ))
         except Exception as e:
             errors.append(f"Cycle {i}: {e}")
@@ -380,17 +376,17 @@ def _process_vib(file_path: str) -> VibResult:
     cycles: list[VibRawCycle] = []
     for i, vc in enumerate(raw_cycles):
         vib_data = vc["data"]
-        vib_x = [item.get("accel_x", 0) for item in vib_data]
-        vib_z_raw = [item.get("accel_z", 0) for item in vib_data]
-        vib_z = [v + z_off for v in vib_z_raw] if z_off != 0.0 else vib_z_raw
+        vib_x_arr = [item.get("accel_x", 0) for item in vib_data]
+        vib_z_raw_arr = [item.get("accel_z", 0) for item in vib_data]
+        vib_z_arr = [v + z_off for v in vib_z_raw_arr] if z_off != 0.0 else vib_z_raw_arr
 
-        vx_stats: AxisStats = analyze_axis(vib_x)
-        vz_stats: AxisStats = analyze_axis(vib_z)
+        vx_stats: AxisStats = analyze_axis(vib_x_arr)
+        vz_stats: AxisStats = analyze_axis(vib_z_arr)
 
         cycles.append(VibRawCycle(
             cycle_index=i,
-            accel_x=vib_x,
-            accel_z=vib_z,
+            accel_x_arr=vib_x_arr,
+            accel_z_arr=vib_z_arr,
             vib_x_stats=vx_stats,
             vib_z_stats=vz_stats,
         ))
@@ -422,21 +418,23 @@ def _merge_pulse_vib(pulse_result: PulseResult,
         if vc:
             vib_x_stats = vc["vib_x_stats"]
             vib_z_stats = vc["vib_z_stats"]
-            vib_accel_x = vc["accel_x"]
-            vib_accel_z = vc["accel_z"]
-            max_vib_x = max((abs(v) for v in vib_accel_x), default=0)
-            max_vib_z = max((abs(v) for v in vib_accel_z), default=0)
-            burst_count = pc["burst_count"] + vib_x_stats["burst_count"] + vib_z_stats["burst_count"]
-            peak_impact_count = pc["peak_impact_count"] + vib_x_stats["peak_impact_count"] + vib_z_stats["peak_impact_count"]
+            vib_accel_x_arr = vc["accel_x_arr"]
+            vib_accel_z_arr = vc["accel_z_arr"]
+            max_vib_x = max((abs(v) for v in vib_accel_x_arr), default=0)
+            max_vib_z = max((abs(v) for v in vib_accel_z_arr), default=0)
         else:
             vib_x_stats = _empty_axis
             vib_z_stats = _empty_axis
-            vib_accel_x = []
-            vib_accel_z = []
-            max_vib_x = max((abs(v) for v in pc["raw_accel_x"]), default=0)
-            max_vib_z = max((abs(v) for v in pc["raw_accel_z"]), default=0)
-            burst_count = pc["burst_count"]
-            peak_impact_count = pc["peak_impact_count"]
+            vib_accel_x_arr = []
+            vib_accel_z_arr = []
+            max_vib_x = 0.0
+            max_vib_z = 0.0
+
+        # 5축 합산 (pulse_x + pulse_y + pulse_z + vib_x + vib_z)
+        all_stats = (pc["pulse_x_stats"], pc["pulse_y_stats"], pc["pulse_z_stats"],
+                     vib_x_stats, vib_z_stats)
+        burst_count = sum(s["burst_count"] for s in all_stats)
+        peak_impact_count = sum(s["peak_impact_count"] for s in all_stats)
 
         merged.append(MergedCycle(
             timestamp=pc["timestamp"],
@@ -464,11 +462,11 @@ def _merge_pulse_vib(pulse_result: PulseResult,
             burst_count=burst_count,
             peak_impact_count=peak_impact_count,
             raw_pulses=pc["raw_pulses"],
-            raw_accel_x=pc["raw_accel_x"],
-            raw_accel_y=pc["raw_accel_y"],
-            raw_accel_z=pc["raw_accel_z"],
-            vib_accel_x=vib_accel_x,
-            vib_accel_z=vib_accel_z,
+            raw_accel_x_arr=pc["raw_accel_x_arr"],
+            raw_accel_y_arr=pc["raw_accel_y_arr"],
+            raw_accel_z_arr=pc["raw_accel_z_arr"],
+            vib_accel_x_arr=vib_accel_x_arr,
+            vib_accel_z_arr=vib_accel_z_arr,
         ))
 
     return merged
@@ -506,6 +504,11 @@ def _process_file(file_path: str) -> tuple[list[MergedCycle], PulseResult | VibR
 
 def ingest_file(file_path: str, conn=None) -> IngestDetail:
     """단일 CSV 파일 적재 (파싱 → 계산 → DB 저장)."""
+    source = str(Path(file_path).resolve())
+    if exists_by_path(source):
+        return IngestDetail(filename=Path(file_path).name,
+                            cycles_ingested=0, cycles_skipped=0,
+                            errors=["이미 적재된 파일"])
     merged, result = _process_file(file_path)
     inserted_count = _write_to_db(merged, result, conn)
     return _to_detail(result, inserted_count)
@@ -529,16 +532,28 @@ def ingest_files(paths: list[str], on_progress: Callable | None = None) -> Inges
         if on_progress:
             on_progress(completed, total)
 
+    # 0단계: 이미 적재된 파일 필터링
+    new_paths: list[str] = []
+    skipped_details: list[IngestDetail] = []
+    for p in paths:
+        source = str(Path(p).resolve())
+        if exists_by_path(source):
+            skipped_details.append(IngestDetail(
+                filename=Path(p).name, cycles_ingested=0,
+                cycles_skipped=0, errors=["이미 적재된 파일"]))
+        else:
+            new_paths.append(p)
+
     # 1단계: 병렬 파싱 + 계산
     processed: list[tuple[list[MergedCycle], PulseResult | VibResult]] = []
-    if total <= 2:
-        for i, p in enumerate(paths):
+    if len(new_paths) <= 2:
+        for i, p in enumerate(new_paths):
             processed.append(_process_file(p))
             _notify(i + 1)
     else:
         completed = 0
         with ProcessPoolExecutor(max_workers=_MAX_WORKERS) as executor:
-            futures = {executor.submit(_process_file, p): p for p in paths}
+            futures = {executor.submit(_process_file, p): p for p in new_paths}
             for future in as_completed(futures):
                 try:
                     processed.append(future.result())
@@ -565,7 +580,7 @@ def ingest_files(paths: list[str], on_progress: Callable | None = None) -> Inges
     success_cycles = 0
     skipped_cycles = 0
     failed_lines = 0
-    details: list[IngestDetail] = []
+    details: list[IngestDetail] = list(skipped_details)
 
     for (_, result), inserted_count in zip(processed, inserted_counts):
         detail = _to_detail(result, inserted_count)
@@ -575,7 +590,7 @@ def ingest_files(paths: list[str], on_progress: Callable | None = None) -> Inges
         failed_lines += len(detail["errors"])
 
     return IngestBatchResult(
-        total_files=len(processed),
+        total_files=len(processed) + len(skipped_details),
         success_cycles=success_cycles,
         skipped_cycles=skipped_cycles,
         failed_lines=failed_lines,
@@ -610,29 +625,37 @@ def _write_to_db(merged: list[MergedCycle],
                  result: PulseResult | VibResult,
                  conn=None) -> int:
     """파싱 결과를 DB에 저장. conn이 주어지면 커밋하지 않음 (호출자가 관리).
-    반환: 삽입된 cycle 수."""
+
+    흐름:
+      1. t_cycle: 멀티 row VALUES + RETURNING id
+      2. t_pulse_waveform: COPY
+      3. t_vib_waveform: COPY
+    반환: 삽입된 cycle 수.
+    """
     if merged:
-        inserted_count = 0
-        for mc in merged:
-            db_row = _flatten_merged_cycle(mc)
+        # 1) t_cycle 일괄 INSERT → id 목록 확보
+        db_rows = [_flatten_merged_cycle(mc) for mc in merged]
+        ids = insert_many(db_rows, conn=conn)
 
-            ids = insert_many([db_row], conn=conn)
-            if not ids:
-                continue
-            cycle_id = ids[0]
-            inserted_count += 1
+        # 2) cycle_id ↔ MergedCycle 매핑 → waveform COPY용 데이터 조립
+        pulse_waveform_rows: list[tuple[int, list[int], list[float], list[float], list[float]]] = []
+        vib_waveform_rows: list[tuple[int, list[float], list[float]]] = []
 
-            # PULSE 파형 저장
-            insert_pulse_waveform(
-                cycle_id, mc["raw_pulses"], mc["raw_accel_x"],
-                mc["raw_accel_y"], mc["raw_accel_z"], conn=conn,
-            )
+        for cycle_id, mc in zip(ids, merged):
+            pulse_waveform_rows.append((
+                cycle_id, mc["raw_pulses"], mc["raw_accel_x_arr"],
+                mc["raw_accel_y_arr"], mc["raw_accel_z_arr"],
+            ))
+            if mc["vib_accel_x_arr"]:
+                vib_waveform_rows.append((
+                    cycle_id, mc["vib_accel_x_arr"], mc["vib_accel_z_arr"],
+                ))
 
-            # VIB 파형 저장 (VIB 데이터가 있는 경우만)
-            if mc["vib_accel_x"]:
-                insert_vib_waveform(
-                    cycle_id, mc["vib_accel_x"], mc["vib_accel_z"], conn=conn)
+        # 3) waveform COPY
+        copy_pulse_waveforms(pulse_waveform_rows, conn=conn)
+        copy_vib_waveforms(vib_waveform_rows, conn=conn)
 
+        inserted_count = len(ids)
         upsert_ingested_file(
             result["source"], result["filename"], "PULSE",
             inserted_count, result["skipped"], len(result["errors"]), conn=conn

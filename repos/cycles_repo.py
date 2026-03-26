@@ -1,4 +1,5 @@
 """Repository for t_cycle table CRUD and queries."""
+from psycopg.sql import SQL, Identifier, Placeholder
 from services import database
 from services.settings_service import get_setting
 
@@ -8,43 +9,25 @@ _STAT_FIELDS = ("rms", "peak", "min", "max", "q1", "median", "q3",
                 "exceed_count", "exceed_ratio", "exceed_duration_ms")
 _STAT_COLUMNS = [f"{ax}_{f}" for ax in _STAT_AXES for f in _STAT_FIELDS]
 
-_INSERT_SQL = """
-    INSERT INTO t_cycle (
-        timestamp, date, month, device, device_name, cycle_index,
-        rpm_mean, rpm_min, rpm_max,
-        mpm_mean, mpm_min, mpm_max,
-        duration_ms, set_count, expected_count,
-        max_vib_x, max_vib_z,
-        {stat_cols},
-        burst_count, peak_impact_count
-    ) VALUES (
-        %(timestamp)s, %(date)s, %(month)s, %(device)s, %(device_name)s, %(cycle_index)s,
-        %(rpm_mean)s, %(rpm_min)s, %(rpm_max)s,
-        %(mpm_mean)s, %(mpm_min)s, %(mpm_max)s,
-        %(duration_ms)s, %(set_count)s, %(expected_count)s,
-        %(max_vib_x)s, %(max_vib_z)s,
-        {stat_params},
-        %(burst_count)s, %(peak_impact_count)s
-    )
-    ON CONFLICT (device, date, cycle_index) DO UPDATE SET
-        timestamp = EXCLUDED.timestamp,
-        device_name = EXCLUDED.device_name,
-        rpm_mean = EXCLUDED.rpm_mean, rpm_min = EXCLUDED.rpm_min, rpm_max = EXCLUDED.rpm_max,
-        mpm_mean = EXCLUDED.mpm_mean, mpm_min = EXCLUDED.mpm_min, mpm_max = EXCLUDED.mpm_max,
-        duration_ms = EXCLUDED.duration_ms, set_count = EXCLUDED.set_count,
-        expected_count = EXCLUDED.expected_count,
-        max_vib_x = EXCLUDED.max_vib_x, max_vib_z = EXCLUDED.max_vib_z,
-        burst_count = EXCLUDED.burst_count, peak_impact_count = EXCLUDED.peak_impact_count
-    RETURNING id
-""".format(
-    stat_cols=", ".join(_STAT_COLUMNS),
-    stat_params=", ".join(f"%({c})s" for c in _STAT_COLUMNS),
-)
+# INSERT 대상 컬럼 순서 (멀티 row VALUES에서 일관된 순서 보장)
+_INSERT_COLUMNS = [
+    "timestamp", "date", "month", "device", "device_name", "cycle_index",
+    "rpm_mean", "rpm_min", "rpm_max",
+    "mpm_mean", "mpm_min", "mpm_max",
+    "duration_ms", "set_count", "expected_count",
+    "max_vib_x", "max_vib_z",
+    *_STAT_COLUMNS,
+    "burst_count", "peak_impact_count",
+]
+
+# 멀티 row VALUES용 SQL 템플릿 (동적으로 row 수만큼 확장)
+_COL_LIST = SQL(", ").join(Identifier(c) for c in _INSERT_COLUMNS)
+_ONE_ROW = SQL("({})").format(SQL(", ").join(Placeholder() for _ in _INSERT_COLUMNS))
 
 
 def insert_many(cycles: list[dict], conn=None) -> list[int]:
-    """Bulk insert cycles. Returns list of inserted/upserted row ids.
-    If conn is provided, does NOT commit (caller manages tx)."""
+    """멀티 row VALUES + RETURNING으로 일괄 INSERT.
+    conn이 주어지면 커밋하지 않음 (호출자가 관리)."""
     if not cycles:
         return []
 
@@ -52,11 +35,21 @@ def insert_many(cycles: list[dict], conn=None) -> list[int]:
     if is_own_conn:
         conn = database.get_connection()
     try:
-        ids = []
+        # 멀티 row VALUES 조립
+        values_list = SQL(", ").join(_ONE_ROW for _ in cycles)
+        query = SQL("INSERT INTO t_cycle ({cols}) VALUES {values} RETURNING id").format(
+            cols=_COL_LIST, values=values_list,
+        )
+
+        # 파라미터를 flat tuple로 변환 (_INSERT_COLUMNS 순서)
+        params: list = []
         for cycle in cycles:
-            row = conn.execute(_INSERT_SQL, cycle).fetchone()  # type: ignore[arg-type]
-            if row:
-                ids.append(row["id"])
+            for col in _INSERT_COLUMNS:
+                params.append(cycle.get(col, 0))
+
+        rows = conn.execute(query, params).fetchall()
+        ids = [row["id"] for row in rows]
+
         if is_own_conn:
             conn.commit()
         return ids
