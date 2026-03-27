@@ -1,5 +1,15 @@
 # TanStack React Query (@tanstack/react-query)
 
+## 버전 히스토리
+
+| 버전 | 패키지명 | 비고 |
+|------|----------|------|
+| v1~v3 | `react-query` | React 전용 |
+| v4 | `@tanstack/react-query` | TanStack 브랜드로 통합, Vue/Svelte 등 멀티프레임워크 지원 |
+| v5 | `@tanstack/react-query` | 현재 프로젝트 사용 버전. API 간소화, 타입 개선 |
+
+v4부터 패키지명이 바뀌었을 뿐 핵심 개념(queryKey, queryFn, staleTime 등)은 동일하다.
+
 ## 핵심 철학
 
 **서버 상태(server state)와 클라이언트 상태(client state)는 본질적으로 다르다.**
@@ -125,6 +135,116 @@ queryKey는 **의존성 배열**처럼 동작한다. 값이 바뀌면 새 쿼리
 
 invalidate 시 부분 매칭:
 - `invalidateQueries({ queryKey: ['cycles'] })` → cycles로 시작하는 모든 쿼리 무효화
+
+## QueryClient — 캐시 직접 접근
+
+`useQueryClient()`로 React Query의 캐시 스토어에 직접 접근할 수 있다.
+
+```tsx
+const queryClient = useQueryClient();
+```
+
+### 주요 메서드
+
+| 메서드 | 용도 | 특징 |
+|--------|------|------|
+| `getQueryData(queryKey)` | 캐시에서 데이터 읽기 | 동기 호출, 네트워크 요청 없음 |
+| `setQueryData(queryKey, data)` | 캐시에 직접 쓰기 | optimistic update에 활용 |
+| `invalidateQueries({ queryKey })` | 캐시 무효화 → 리페치 | 구독 중인 컴포넌트 자동 갱신 |
+| `prefetchQuery(options)` | 미리 캐시에 로드 | 사용자 행동 예측 시 preload |
+
+### 활용 패턴: 캐시 우선 조회 (cache-first)
+
+이미 캐시된 데이터가 있으면 재사용하고, 없을 때만 API를 호출하는 패턴:
+
+```tsx
+const queryClient = useQueryClient();
+
+// 1. 캐시에서 동기적으로 조회
+const cached = queryClient.getQueryData<DailyDataResponse>(['daily-data', month, date]);
+const cachedCycle = cached?.cycles.find(c => c.device_name === deviceName);
+
+// 2. 캐시에 없을 때만 API fallback
+const { data } = useQuery({
+  queryKey: ['cycleDetail', date, deviceName, cycleIndex],
+  queryFn: () => fetchCycleDetail(date, deviceName, cycleIndex),
+  enabled: !cachedCycle,  // 캐시 hit이면 쿼리 비활성화
+});
+
+// 3. 캐시 우선 반환
+return cachedCycle ?? data;
+```
+
+이 패턴의 장점:
+- 불필요한 API 호출 제거
+- 상위 컴포넌트가 이미 로드한 데이터를 하위에서 재활용
+- `enabled` 옵션으로 조건부 실행 → fallback 독립성 유지
+
+## queryKey 관리 전략
+
+### queryKey와 API의 관계
+
+기본적으로 **1개 API 엔드포인트 = 1개 queryKey 패턴**이다.
+
+```
+GET /cycles/daily           → ['daily-data', month, date]
+GET /cycles/daily/waveforms → ['daily-waveforms', month, date]
+GET /cycles/detail          → ['cycleDetail', date, device, index]
+GET /settings               → ['settings']
+```
+
+파라미터가 달라지면 별도 캐시 엔트리:
+```
+['daily-data', '2603', '260311']  ← 3/11 데이터
+['daily-data', '2603', '260312']  ← 3/12 데이터 (별도 캐시)
+```
+
+### Query 레이어 분리 패턴
+
+API 함수는 그대로 두고, `api/query/` 폴더에 queryKey + useQuery 래핑을 분리하는 구조:
+
+```
+api/
+  cycles.ts              ← 순수 API 함수 (변경 없음)
+  settings.ts
+  query/
+    cyclesQuery.ts       ← queryKey 정의 + useQuery 래핑
+    settingsQuery.ts
+```
+
+```tsx
+// api/query/cyclesQuery.ts
+import { useQuery } from '@tanstack/react-query';
+import { fetchDailyCycles, fetchDailyWaveforms } from '../cycles';
+
+export const cyclesQueryKeys = {
+  daily: (month: string, date: string) => ['daily-data', month, date] as const,
+  waveforms: (month: string, date: string) => ['daily-waveforms', month, date] as const,
+  detail: (date: string, device: string, index: number) => ['cycleDetail', date, device, index] as const,
+};
+
+export function useDailyCycles(month: string | null, date: string | null) {
+  return useQuery({
+    queryKey: cyclesQueryKeys.daily(month!, date!),
+    queryFn: () => fetchDailyCycles(month!, date!),
+    enabled: !!month && !!date,
+  });
+}
+
+export function useDailyWaveforms(month: string, date: string) {
+  return useQuery({
+    queryKey: cyclesQueryKeys.waveforms(month, date),
+    queryFn: () => fetchDailyWaveforms(month, date),
+  });
+}
+```
+
+이 구조의 장점:
+- **API 함수 변경 없음** — 기존 코드 영향 최소화
+- **queryKey가 query 파일에 집중** — 키 관리 한 곳, 오타/불일치 방지
+- **hooks/ 폴더 역할 분리** — query 관련 hook은 `api/query/`로, 순수 UI 로직 hook만 `hooks/`에 잔류
+- 사용처에서는 `useDailyCycles(month, date)` 한 줄로 호출
+- `invalidateQueries`, `getQueryData` 시에도 `cyclesQueryKeys.daily(...)` 로 동일한 키 참조
 
 ## 현재 프로젝트 적용
 
