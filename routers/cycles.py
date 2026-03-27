@@ -3,7 +3,7 @@ from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 
 from repos.cycles_repo import get_months as repo_get_months, get_dates as repo_get_dates
-from services.daily_data_service import build_daily_data, build_cycle_detail
+from services.daily_data_service import build_daily_data, build_daily_waveforms, build_cycle_detail
 from services.excel_export import generate_daily_report
 
 router = APIRouter(prefix="/api")
@@ -38,6 +38,12 @@ def get_dates(month: str = Query(...)):
 def get_daily_data(month: str = Query(...), date: str = Query(...)):
     """일별 사이클 데이터 조회."""
     return build_daily_data(month, date)
+
+
+@router.get("/cycles/daily/waveforms")
+def get_daily_waveforms(month: str = Query(...), date: str = Query(...)):
+    """일별 전체 사이클의 원시 파형 데이터 반환 (VibrationChart용)."""
+    return build_daily_waveforms(month, date)
 
 
 @router.get("/cycles/export-excel")

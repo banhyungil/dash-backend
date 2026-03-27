@@ -21,37 +21,24 @@ _EMPTY_ARRAYS = {
 
 
 def build_daily_data(month: str, date: str) -> dict:
-    """일별 사이클 데이터 빌드 (API + Excel 공용).
+    """일별 사이클 집계 데이터 빌드 (stats만, 파형 없음).
 
     처리 흐름:
       1. DB에서 해당 날짜 사이클 집계값 조회
-      2. cycle id로 DB에서 배열 데이터(RPM 타임라인, 가속도 등) 로드
-      3. VIB 데이터 매칭
-      4. 중력 보정
-      5. DB stats → 프론트 응답 형식 변환
-      6. 타임라인 오프셋 계산
+      2. DB stats → 프론트 응답 형식 변환
+      3. 타임라인 오프셋 계산
     """
     empty = {"date": date, "device": "all", "settings": {}, "cycles": [], "total_cycles": 0}
 
-    # DB에서 해당 날짜의 사이클 집계값 조회 (rpm_mean, mpm_mean 등)
     db_cycles = find_by_date(month, date)
     if not db_cycles:
         return empty
 
     shaft_dia = get_setting("shaft_dia")
     pattern_width = get_setting("pattern_width")
-    roll_diameter = get_setting("roll_diameter")
-    gravity_offset = get_setting("gravity_offset")
 
-    # cycle id 기반으로 DB에서 배열 데이터 로드 (RPM 타임라인, 가속도 파형)
-    result_cycles = _load_pulse_arrays(db_cycles, shaft_dia, pattern_width, roll_diameter)
-    # cycle id 기반으로 DB에서 VIB 가속도 배열 매칭
-    _load_vib_arrays(result_cycles)
-    # R1/R2는 Z축에서 1g 차감 (센서 장착 방향에 의한 중력 성분 제거)
-    _apply_gravity_correction(result_cycles, gravity_offset)
-    # DB에 저장된 rms/peak/burst 값을 프론트 응답 형식(stats_pulse_x 등)으로 변환
+    result_cycles = list(db_cycles)
     _attach_stats(result_cycles)
-    # 사이클 간 연속 타임라인 오프셋 계산 (차트 X축 연속 배치용)
     result_cycles = calculate_continuous_timeline(result_cycles)
 
     return {
@@ -67,48 +54,49 @@ def build_daily_data(month: str, date: str) -> dict:
     }
 
 
+def build_daily_waveforms(month: str, date: str) -> dict:
+    """일별 전체 사이클의 원시 파형 데이터 반환 (VibrationChart용).
+
+    처리 흐름:
+      1. DB에서 해당 날짜 사이클 조회
+      2. cycle id로 PULSE/VIB 파형 로드
+      3. 중력 보정
+    """
+    db_cycles = find_by_date(month, date)
+    if not db_cycles:
+        return {"cycles": []}
+
+    shaft_dia = get_setting("shaft_dia")
+    pattern_width = get_setting("pattern_width")
+    roll_diameter = get_setting("roll_diameter")
+    gravity_offset = get_setting("gravity_offset")
+
+    result_cycles = _load_pulse_arrays(db_cycles, shaft_dia, pattern_width, roll_diameter)
+    _load_vib_arrays(result_cycles)
+    _apply_gravity_correction(result_cycles, gravity_offset)
+
+    return {"cycles": result_cycles}
+
+
 def build_cycle_detail(date: str, device_name: str, cycle_index: int) -> dict | None:
-    """개별 사이클의 원시 파형 데이터 반환."""
+    """개별 사이클의 집계값 반환 (파형은 /daily/waveforms에서 별도 조회)."""
     cycle = find_one(date, device_name, cycle_index)
     if not cycle:
         return None
 
-    shaft_dia = get_setting("shaft_dia")
-    pattern_width = get_setting("pattern_width")
-
-    cycle_id = cycle["id"]
-    result = {
+    return {
         "date": date,
         "device_name": device_name,
         "cycle_index": cycle_index,
         "timestamp": cycle["timestamp"],
         "rpm_mean": cycle["rpm_mean"],
-        "pulse_accel_x": [], "pulse_accel_y": [], "pulse_accel_z": [],
-        "pulse_timeline": [],
-        "rpm_timeline": [], "rpm_data": [],
-        "vib_accel_x": [], "vib_accel_z": [],
+        "rpm_min": cycle["rpm_min"],
+        "rpm_max": cycle["rpm_max"],
+        "mpm_mean": cycle["mpm_mean"],
+        "duration_ms": cycle["duration_ms"],
+        "set_count": cycle["set_count"],
+        "expected_count": cycle["expected_count"],
     }
-
-    pw = find_pulse_waveform(cycle_id)
-    if pw:
-        rpm_result = process_pulse_compact_to_rpm(
-            pw["pulses"], pw["accel_x"], pw["accel_y"], pw["accel_z"],
-            shaft_dia, pattern_width,
-        )
-        if rpm_result:
-            result["rpm_timeline"] = rpm_result["timeLine"]
-            result["rpm_data"] = rpm_result["dataRPM"]
-            result["pulse_timeline"] = rpm_result.get("rawTimeLine", [])
-            result["pulse_accel_x"] = rpm_result.get("rawAccelX", [])
-            result["pulse_accel_y"] = rpm_result.get("rawAccelY", [])
-            result["pulse_accel_z"] = rpm_result.get("rawAccelZ", [])
-
-    vw = find_vib_waveform(cycle_id)
-    if vw:
-        result["vib_accel_x"] = vw["accel_x"]
-        result["vib_accel_z"] = vw["accel_z"]
-
-    return result
 
 
 # ---------------------------------------------------------------------------

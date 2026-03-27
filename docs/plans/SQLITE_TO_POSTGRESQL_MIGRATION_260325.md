@@ -132,3 +132,4 @@ conn.execute("... VALUES (%(timestamp)s, %(date)s)", row_dict)
 1. `npx pyright` — 0 errors
 2. `pytest` — 전체 통과
 3. 적재 → 조회 → VIB 파형 차트 표시 확인
+
